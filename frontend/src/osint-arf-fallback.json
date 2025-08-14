@@ -1,0 +1,18 @@
+{
+  "name": "OSINT Framework (Fallback Placeholder)",
+  "note": "Remote arf.json could not be fetched. This is a minimal placeholder; replace this file's contents with the full arf.json from https://github.com/lockfale/osint-framework (MIT License) for the complete tree.",
+  "children": [
+    { "name": "Usernames", "type": "T", "children": [
+      { "name": "WhatsMyName", "url": "https://whatsmyname.app", "type": "R" },
+      { "name": "Namechk", "url": "https://namechk.com", "type": "R" }
+    ]},
+    { "name": "Domains", "type": "T", "children": [
+      { "name": "crt.sh", "url": "https://crt.sh", "type": "R" },
+      { "name": "SecurityTrails", "url": "https://securitytrails.com", "type": "R" }
+    ]},
+    { "name": "People", "type": "T", "children": [
+      { "name": "Pipl", "url": "https://pipl.com", "type": "R" },
+      { "name": "Hunter.io", "url": "https://hunter.io", "type": "R" }
+    ]}
+  ]
+}
