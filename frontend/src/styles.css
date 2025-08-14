@@ -100,9 +100,16 @@ body::before { content:""; position:fixed; inset:0; background: var(--noise); mi
 .brand { display:flex; align-items:center; gap:10px; padding:18px 20px 10px; margin-bottom:4px; }
 .brand-logo { width:34px; height:34px; border-radius:10px; background:var(--gradient-accent); display:flex; align-items:center; justify-content:center; font-weight:600; font-size:.85rem; letter-spacing:.5px; box-shadow: var(--shadow-sm); }
 .brand h1 { font-size:1.05rem; margin:0; font-weight:600; letter-spacing:.5px; }
-.nav { flex:1; overflow:auto; padding:4px 16px 12px; display:flex; flex-direction:column; gap:10px; scroll-padding:12px; }
-.nav::-webkit-scrollbar { width:6px; }
-.nav::-webkit-scrollbar-thumb { background:#202a37; border-radius:3px; }
+.nav { flex:1; overflow:auto; padding:4px 16px 12px; display:flex; flex-direction:column; gap:10px; scroll-padding:12px; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
+/* Firefox scrollbar colors */
+html.light .nav { scrollbar-color: rgba(0,0,0,0.25) transparent; }
+/* WebKit scrollbar styling */
+.nav::-webkit-scrollbar { width:8px; background:transparent; }
+.nav::-webkit-scrollbar-track { background: linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01)); border-radius:8px; }
+.nav::-webkit-scrollbar-thumb { background: linear-gradient(180deg,rgba(93,123,255,0.35),rgba(56,232,210,0.28)); border-radius:8px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); backdrop-filter: blur(2px); }
+.nav::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg,rgba(93,123,255,0.55),rgba(56,232,210,0.5)); }
+html.light .nav::-webkit-scrollbar-thumb { background: linear-gradient(180deg,rgba(37,99,235,0.45),rgba(124,58,237,0.35)); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08); }
+html.light .nav::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg,rgba(37,99,235,0.65),rgba(124,58,237,0.55)); }
 .nav-button { width:100%; background:linear-gradient(140deg,rgba(255,255,255,.05),rgba(255,255,255,0) 60%); border:1px solid rgba(255,255,255,.05); color:var(--text-dim); padding:11px 16px; text-align:left; display:flex; align-items:center; gap:12px; cursor:pointer; font-size:.8rem; font-weight:500; letter-spacing:.4px; border-radius: 14px; position:relative; transition: var(--trans-fast), border-color .25s, box-shadow .25s; overflow:hidden; backdrop-filter: blur(4px); }
 .nav-button::before { content:""; position:absolute; inset:0; background:linear-gradient(100deg,rgba(255,255,255,.18),rgba(255,255,255,0) 55%); opacity:0; transition: var(--trans-fast); mix-blend-mode:overlay; }
 .nav-button::after { content:""; position:absolute; top:-140%; left:-60%; width:160%; height:380%; background:radial-gradient(circle at 30% 30%, rgba(255,255,255,.4), rgba(255,255,255,0) 70%); transform:translateX(-60%) rotate(25deg); opacity:0; transition:800ms cubic-bezier(.4,.0,.2,1); }
