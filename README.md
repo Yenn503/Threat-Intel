@@ -23,25 +23,48 @@ The goal is to provide a streamlined research cockpit: enumerate, enrich, protot
 
 ## Features
 Implemented (current milestone):
-- Auth (session token) & role concept placeholder
-- Dashboard metrics (mock / example wiring)
-- Exploit Techniques CRUD panel (templates + descriptions)
-- Embedded persistent web terminal (WS PTY bridge)
-- Code Editor (Monaco) with snapshots, diff viewer, snippets, formatting, run (JS/TS)
-- OSINT Framework tree (collapsible) + radial visualization mode (local JSON placeholder)
-- DB Search panel (HIBP style batch & rate pacing logic – backend stub)
-- Vuln Search (placeholder wiring for CVE lookups)
-- Settings & Admin panels (system metrics, user list, config preview)
+  Core & Platform
+  - Auth (session token) & role concept placeholder
+  - Dashboard metrics (mock / example wiring)
+  - Exploit Techniques CRUD panel (templates + descriptions)
+  - Embedded persistent web terminal (WS PTY bridge)
+  - Code Editor (Monaco) with snapshots, diff viewer, snippets, formatting, run (JS/TS)
+  - LocalStorage persistence (active panel, theme, editor files)
+  Intelligence & Research
+  - OSINT Framework tree (collapsible) + radial visualization mode (placeholder dataset)
+  - Vuln Search panel (independent CVE keyword search; separated from FSWA)
+  - First Stage Web Assessment (FSWA) panel: WHOIS, Shodan host lookup, WordPress plugin enumeration
+  Data & Utilities
+  - DB Search panel (HIBP style batch & rate pacing logic – backend stub)
+  - Settings & Admin panels (system metrics, user list, config preview)
+  UI / UX
+  - Modular panel architecture (no router) with dynamic grouping & Assessments section
+  - Themed sidebar with enlarged section headers & subtle underline separators
+  - Custom themed scrollbar styling (dark/light adaptive)
+  Scaffolding (placeholders ready for implementation)
+  - Network VA panel
+  - Digital Footprint panel
+  - Cyber Risk Exposure panel
 
-Planned / Backlog:
-- Full upstream OSINT dataset integration & legend styling
-- Search/filter across OSINT tree & exploit techniques
-- Auth hardening (JWT refresh, RBAC, MFA option)
-- API key management & user audit log
-- DeHashed / additional breach sources abstraction layer
-- CVE enrichment (EPSS, KEV, NVD severity caching)
-- Export / import of techniques & editor files
-- Dark/light theme refinements & accessibility improvements
+Planned / Backlog (updated):
+  Data & Enrichment
+  - Full upstream OSINT dataset integration & legend styling
+  - CVE enrichment (EPSS, KEV, NVD severity caching)
+  - DeHashed / additional breach sources abstraction layer
+  Platform & Security
+  - Auth hardening (refresh tokens, RBAC, MFA option)
+  - API key management & user audit log
+  - Export / import of techniques & editor files
+  Assessments Expansion
+  - Network VA implementation (host discovery, service enum, lightweight vuln mapping)
+  - Digital Footprint enumeration (subdomains, CT logs, exposed assets)
+  - Cyber Risk Exposure scoring (asset criticality + vuln likelihood model)
+  - FSWA enhancements (tech fingerprinting, TLS/cert insights, screenshot capture)
+  UX & Performance
+  - Search/filter across OSINT tree & exploit techniques
+  - Dark/light theme contrast & full accessibility pass 
+  - Lazy loading / code splitting for heavier panels (editor, FSWA)
+  - Keyboard command palette extensions & panel switch hotkeys
 
 ## Architecture
 ```
