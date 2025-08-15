@@ -8,6 +8,9 @@ import { logStepTransition, logger } from '../logger.js';
 let agentLoopRunning = false;
 let loopStarted = false;
 const LOOP_INTERVAL_MS = process.env.NODE_ENV==='test' ? 150 : 3000;
+let deterministicMode = process.env.AGENT_NON_DETERMINISTIC==='1' ? false : (process.env.NODE_ENV==='test');
+
+export function setDeterministicAgentMode(v){ deterministicMode = !!v; }
 
 export function planFromInstruction(instr){
   const lower = (instr||'').toLowerCase();
@@ -25,11 +28,14 @@ export function planFromInstruction(instr){
   return null;
 }
 
-async function agentLoop(){
-  if(agentLoopRunning) return; agentLoopRunning = true;
-  try {
-    const work = AITasks.queued();
-    for(const task of work){
+async function processAgentWork(opts={}){
+  const deterministic = opts.deterministic!==undefined ? opts.deterministic : deterministicMode;
+  const maxTransitionsPerTask = deterministic ? 1 : Infinity;
+  let overallTransitions = 0;
+  const work = AITasks.queued();
+  for(const task of work){
+      let transitionsForTask = 0;
+      function transitionPerformed(){ transitionsForTask++; overallTransitions++; }
       let plan = []; try { plan = JSON.parse(task.plan_json||'[]'); } catch { plan=[]; }
       let mutated = false;
   // Deadlock detection: only track pending steps when there are NONE runnable this iteration.
@@ -37,7 +43,7 @@ async function agentLoop(){
   let DEADLOCK_MS = parseInt(process.env.AGENT_DEADLOCK_MS,10);
   if(!Number.isFinite(DEADLOCK_MS) || DEADLOCK_MS <= 0){ DEADLOCK_MS = 5*60*1000; }
       // Reconcile running queue-scan steps whose scans have finished
-      for(const qs of plan){
+  for(const qs of plan){
         if(qs.action==='queue-scan' && qs.status==='running' && qs.scanId){
           const scan = Scans.get(qs.scanId);
             if(scan){
@@ -63,7 +69,8 @@ async function agentLoop(){
         for(const s of plan){ if(s.status==='pending' && s.firstSeenPending) delete s.firstSeenPending; }
       }
       const iterationSet = runnable.length? runnable : plan;
-      for(const step of iterationSet){
+      let breakOuterTaskLoop = false;
+  for(const step of iterationSet){
         // If not runnable due to dependency (in fallback path), continue
         if(step.status==='pending' && Array.isArray(step.dependsOn) && step.dependsOn.length){
           const unmet = step.dependsOn.some(d=> {
@@ -85,19 +92,38 @@ async function agentLoop(){
               } catch {}
             }
           }
+          if(mutated){ transitionPerformed(); if(transitionsForTask>=maxTransitionsPerTask){ breakOuterTaskLoop=true; break; } }
           continue;
         }
   if(step.status!=='pending') continue;
-        if(step.tool){
+  if(step.tool){
           try {
             const prev = step.status; step.status='running'; step.startedAt = Date.now(); mutated=true; logStepTransition(task.id, step, prev, step.status); AITasks.updatePlan(task.id, plan);
             AIMessages.add(task.user_id,'assistant', `Running ${step.tool} ${step.args? JSON.stringify(step.args):''}`);
             const result = await executeToolStep(step, task.user_id, enqueueScan);
             if(result && result.scanId){
               step.scanId = result.scanId; step.waitForScan = true; const prev2 = step.status; step.status='waiting'; logStepTransition(task.id, step, prev2, step.status);
-            } else { step.result = result; const prev2 = step.status; step.status='done'; step.completedAt=Date.now(); logStepTransition(task.id, step, prev2, step.status); AIMessages.add(task.user_id,'assistant', `${step.tool} done.`); }
-          } catch(e){ const prev2 = step.status; step.status='error'; step.error=e.message.slice(0,200); logStepTransition(task.id, step, prev2, step.status); logger.error('tool_step_error',{ taskId:task.id, step: step.idx, err:e.message }); }
-          mutated=true; break;
+              // Immediate persistence for waiting state to reduce race windows in tests
+              AITasks.updatePlan(task.id, plan);
+            } else {
+              step.result = result; const prev2 = step.status; step.status='done'; step.completedAt=Date.now(); logStepTransition(task.id, step, prev2, step.status); AIMessages.add(task.user_id,'assistant', `${step.tool} done.`);
+              // Flush immediately so polling sees done/error promptly
+              AITasks.updatePlan(task.id, plan);
+            }
+          } catch(e){
+            const prev2 = step.status; step.status='error'; step.error=e.message.slice(0,200); logStepTransition(task.id, step, prev2, step.status); logger.error('tool_step_error',{ taskId:task.id, step: step.idx, err:e.message });
+            // Persist error immediately for deterministic observation
+            try { AITasks.updatePlan(task.id, plan); } catch {/* ignore */}
+          }
+          mutated=true;
+          transitionPerformed();
+          // If the step finished immediately (done or error) and didn't enter waiting state, continue loop to potentially run another tool this cycle
+          if(step.status==='done' || step.status==='error'){
+            if(transitionsForTask>=maxTransitionsPerTask){ breakOuterTaskLoop=true; break; }
+            continue;
+          }
+          // If step is waiting (scan), stop this cycle to let scan progress (counted as a transition)
+          breakOuterTaskLoop=true; break;
         }
         if(step.action==='queue-scan'){
           const recent = db.prepare('SELECT id,status FROM scans WHERE target=? AND type=? ORDER BY created_at DESC LIMIT 5').all(step.target, step.kind);
@@ -127,7 +153,9 @@ async function agentLoop(){
           const textSummary = `Summary for ${step.target}:\nOpen Ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.service).join(', ')||'none'}\nFindings: ${(nucleiSummary.findings||[]).length} issues (critical:${(nucleiSummary.findings||[]).filter(f=>f.severity==='critical').length}, high:${(nucleiSummary.findings||[]).filter(f=>f.severity==='high').length}, medium:${(nucleiSummary.findings||[]).filter(f=>f.severity==='medium').length})\nTop Recommendations:\n${recs.slice(0,5).map(r=> '- '+r.text).join('\n') || 'None'}\n`;
           step.result = { text: textSummary }; const prev = step.status; step.status='done'; step.completedAt=Date.now(); logStepTransition(task.id, step, prev, step.status); mutated=true;
         }
+  if(mutated && deterministic && transitionsForTask>=maxTransitionsPerTask){ breakOuterTaskLoop=true; break; }
       }
+      if(deterministic && breakOuterTaskLoop){ /* skip further iterationSet processing for this task */ }
       if(mutated){ AITasks.updatePlan(task.id, plan); }
       const unfinished = plan.some(s=> ['pending','running'].includes(s.status) || (s.waitForScan && s.status==='waiting'));
       if(plan.length && !unfinished){
@@ -135,8 +163,13 @@ async function agentLoop(){
         AITasks.complete(task.id, { summary: summaryStep?.result?.text || summaryStep?.result });
         AIMessages.add(task.user_id,'assistant', summaryStep?.result?.text || 'Task complete.');
       }
+      if(deterministic && overallTransitions>=1){ break; }
     }
-  } catch {/* swallow */ }
+}
+
+async function agentLoop(){
+  if(agentLoopRunning) return; agentLoopRunning = true;
+  try { await processAgentWork(); } catch {/* swallow */ }
   agentLoopRunning = false;
   setTimeout(agentLoop, LOOP_INTERVAL_MS).unref();
 }
@@ -151,4 +184,8 @@ export function startAgentLoop(){
   }
 }
 
-export default { startAgentLoop, planFromInstruction };
+export async function runAgentOnce(options){
+  await processAgentWork(options);
+}
+
+export default { startAgentLoop, planFromInstruction, runAgentOnce, setDeterministicAgentMode };

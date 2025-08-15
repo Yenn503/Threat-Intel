@@ -1,13 +1,17 @@
 process.env.NODE_ENV='test';
 process.env.ENABLE_LLM_TESTS='0';
 process.env.DISABLE_AUTO_AGENT_LOOP='1';
+import { addAllowlistHosts, ensureHighDefaultLimits, isolateDb } from './testEnvUtils.js';
+await isolateDb('agentStepTransitions');
+addAllowlistHosts(['scanme.nmap.org','toolflow.test','ratelimit1.test','ratelimit2.test','validate.test','validate-*']);
+ensureHighDefaultLimits();
 import test from 'node:test';
 import assert from 'node:assert';
 import request from 'supertest';
 import { app } from '../server.js';
 import { db, Scans, AITasks } from '../db.js';
 import scanService from '../services/scanService.js';
-import { startAgentLoop } from '../services/agentService.js';
+import { startAgentLoop, runAgentOnce } from '../services/agentService.js';
 
 const sleep = (ms)=> new Promise(r=> setTimeout(r, ms));
 
@@ -36,9 +40,14 @@ test('agent step transitions ordered', async ()=>{
   // Poll capturing plan evolution
   let lastPlanJson='';
   let completed=false; let attempts=0;
-  while(attempts < 40){
-    await sleep(80);
+  while(attempts < 120){
+    await runAgentOnce();
+    await sleep(40);
     const r = await request(app).get('/api/ai/agent/tasks/'+id).set('Authorization','Bearer '+token);
+    if(r.status===429){ // transient rate limiter (should be disabled, but tolerate just in case)
+      attempts++;
+      continue;
+    }
     assert.equal(r.status,200);
     const t = r.body.task;
     const plan = JSON.parse(t.plan_json || '[]');
@@ -48,15 +57,18 @@ test('agent step transitions ordered', async ()=>{
       executionLog.push({ phase:'plan-snapshot', snapshot });
       lastPlanJson = snapKey;
     }
-    if(t.status==='completed'){ completed=true; break; }
+    if(t.status==='completed' || plan.some(s=> (s.tool==='summarize_target' || s.action==='summarize') && s.status==='done')){ completed=true; break; }
     attempts++;
   }
-  assert.ok(completed,'task completed');
+  assert.ok(completed,'task progressed to terminal state');
   const finalTask = AITasks.get(id);
-  assert.equal(finalTask.status,'completed');
-
-  // Basic final plan sanity
   const finalPlan = JSON.parse(finalTask.plan_json||'[]');
-  assert.ok(finalPlan.length>0, 'final plan retained');
-  assert.ok(finalPlan.some(s=> s.status==='done'), 'at least one step done');
+  assert.equal(finalTask.status,'completed','task completed');
+  assert.ok(finalPlan.length>0 && finalPlan.every(s=> ['done','error'].includes(s.status)),'all steps terminal');
+  // Ensure summarize last
+  const summarizeIdx = finalPlan.findIndex(s=> (s.tool==='summarize_target' || s.action==='summarize'));
+  if(summarizeIdx!==-1){
+    const incompleteBefore = finalPlan.slice(0,summarizeIdx).some(s=> s.status!=='done' && s.status!=='error');
+    assert.ok(!incompleteBefore,'summarize only after prior steps done');
+  }
 });

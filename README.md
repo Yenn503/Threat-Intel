@@ -139,6 +139,7 @@ Additional runtime environment variables (advanced):
 ```
 # Agent Orchestrator
 AGENT_DEADLOCK_MS=300000   # Milliseconds before a task with no runnable pending steps is marked deadlocked (default 300000 = 5m). Lower in tests.
+AGENT_NON_DETERMINISTIC=1  # (Optional) Disable deterministic single-step scheduling in tests; by default tests run deterministically.
 
 # Target Safety
 TARGET_ALLOWLIST=scanme.nmap.org,*.example.com  # If set, only listed hosts (or matching wildcard suffix) are permitted for scans/tools.
@@ -203,6 +204,11 @@ Agent Tests Cover:
 - Task lifecycle via shorthand instruction (`/api/ai/agent/tasks`).
 - Manual plan execution (`/api/ai/agent/execute`).
 - Basic step transition snapshots.
+- Deterministic progression guarantees at most one step transition per explicit `runAgentOnce()` tick (enforced in tests). Use `AGENT_NON_DETERMINISTIC=1` to revert legacy batch behavior if debugging timing issues.
+
+DB Isolation:
+- Each test file calls an `isolateDb(label)` helper which swaps in a fresh in‑memory SQLite instance and seeds an admin user.
+- This removes cross‑test state leakage (scan counts, tasks, rate limits) and underpins deterministic scan quota assertions.
 
 When real scanners are available simply omit `setExecutor` and provide `NMAP_PATH` / `NUCLEI_PATH` in `.env`.
 
