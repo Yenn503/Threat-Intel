@@ -1,3 +1,4 @@
+// Express server (normalized path casing)
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -10,7 +11,9 @@ import { v4 as uuidv4 } from 'uuid';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { spawn } from 'child_process';
-import { db, Users, Techniques, Activity, seedAdmin } from './db.js';
+import { db, Users, Techniques, Activity, seedAdmin, Scans, ScanRecs, AIMessages, AITasks, AISettings } from './db.js';
+import { llmChat, llmEnabled } from './llm_client.js';
+import EventEmitter from 'events';
 import net from 'net';
 import { promises as dns } from 'dns';
 import pLimit from 'p-limit';
@@ -115,6 +118,25 @@ const generalLimiter = rateLimit({
   max: 120
 });
 app.use(generalLimiter);
+
+// --- Scan & AI Agent Section ---
+import { tools, toolManifest, executeToolStep, buildScan } from './aiTools.js';
+import { TARGET_REGEX } from './constants.js';
+import scanService, { enqueueScan } from './services/scanService.js';
+import registerScanRoutes from './routes/scanRoutes.js';
+import registerAIRoutes from './routes/aiRoutes.js';
+import { startAgentLoop } from './services/agentService.js';
+// Register externalized route groups
+registerScanRoutes(app, authMiddleware, record);
+registerAIRoutes(app, { authMiddleware, adminMiddleware, record });
+startAgentLoop();
+
+// Basic parsers
+// parseNmap / parseNuclei / deriveScore now sourced from scanService
+
+// Scan execution moved to scanService
+
+// (AI routes & agent loop moved to routes/aiRoutes.js and services/agentService.js)
 
 // HIBP email search with per-user global limit (no tiers) - configure env: HIBP_MAX_PER_MINUTE, HIBP_MAX_BATCH
 const HIBP_MAX_PER_MINUTE = parseInt(process.env.HIBP_MAX_PER_MINUTE || '10',10);
@@ -780,14 +802,22 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => term.kill());
 });
 
-// Export app for testing; only start listener when not running under test
-const port = process.env.PORT || 4000;
-if (process.env.NODE_ENV !== 'test') {
-  server.listen(port, () => {
-    console.log('Backend listening on ' + port);
-    console.log('Assessment routes: /api/assess/whois , /api/assess/shodan');
-  });
-}
+// No automatic server.listen here; start.js is responsible for binding the port.
+
+// --- Global diagnostics (helps when process mysteriously exits) ---
+process.on('uncaughtException', (err)=>{
+  console.error('[FATAL] uncaughtException', err.stack||err.message);
+});
+process.on('unhandledRejection', (reason)=>{
+  console.error('[FATAL] unhandledRejection', reason);
+});
+let heartbeatCount=0;
+setInterval(()=>{
+  heartbeatCount++;
+  if(heartbeatCount % 20 === 0){
+  console.log('[HB] alive uptime='+process.uptime().toFixed(0)+'s scansQueued='+ (typeof scanService!=='undefined' && scanService.queueDepth? scanService.queueDepth():'?'));
+  }
+}, 3000).unref();
 
 // Final 404 handler (after all routes)
 app.use((req,res)=>{ if(!res.headersSent){ console.warn('404', req.method, req.path); res.status(404).json({ error:'not found', path:req.path }); } });

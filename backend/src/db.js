@@ -44,6 +44,71 @@ db.exec(`CREATE TABLE IF NOT EXISTS activity (
   meta TEXT
 );`);
 
+// Scan executions (nmap / nuclei or others)
+db.exec(`CREATE TABLE IF NOT EXISTS scans (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  target TEXT NOT NULL,
+  type TEXT NOT NULL, -- nmap|nuclei|other
+  command TEXT NOT NULL,
+  status TEXT NOT NULL, -- queued|running|completed|failed
+  started_at INTEGER,
+  completed_at INTEGER,
+  raw_output TEXT,
+  summary_json TEXT, -- cached parsed summary
+  score REAL, -- simple risk score from summary
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`);
+
+// AI generated recommendations based on scans
+db.exec(`CREATE TABLE IF NOT EXISTS scan_recommendations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scan_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 0,
+  applied INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
+);`);
+
+// AI chat memory per user
+db.exec(`CREATE TABLE IF NOT EXISTS ai_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT,
+  ts INTEGER NOT NULL,
+  role TEXT NOT NULL, -- user|assistant|system
+  content TEXT NOT NULL
+);`);
+
+// Agent tasks (multi-step plans the AI executes: e.g., run scans then summarize)
+db.exec(`CREATE TABLE IF NOT EXISTS ai_tasks (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  status TEXT NOT NULL, -- queued|running|completed|failed
+  instruction TEXT NOT NULL,
+  plan_json TEXT,
+  result_json TEXT,
+  error TEXT
+);`);
+
+// Global AI tuning settings (single row id=1)
+db.exec(`CREATE TABLE IF NOT EXISTS ai_settings (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  goal TEXT,          -- High-level mission / north star for the AI agent
+  tone TEXT,          -- Tone/style guidelines
+  guardrails TEXT,    -- Safety / scope limitations text
+  updated_at INTEGER NOT NULL
+);`);
+// Seed default settings if empty
+const aiSettingsExists = db.prepare('SELECT 1 FROM ai_settings WHERE id=1').get();
+if(!aiSettingsExists){
+  db.prepare('INSERT INTO ai_settings (id,goal,tone,guardrails,updated_at) VALUES (1,?,?,?,?)')
+    .run('Increase actionable security insight velocity for users while minimizing false positives.', 'Concise, professional, proactive, evidence-driven.', 'Never fabricate scan data. Only queue nmap or nuclei scans. Decline any request unrelated to application security scanning.', Date.now());
+}
+
 export function seedAdmin(bcrypt){
   const exists = db.prepare('SELECT 1 FROM users WHERE email=?').get('admin@example.com');
   if(!exists){
@@ -77,6 +142,64 @@ export const Activity = {
   record(type, userId, meta={}){ db.prepare('INSERT INTO activity (ts,type,user_id,meta) VALUES (?,?,?,?)').run(Date.now(), type, userId||null, JSON.stringify(meta)); },
   recent(limit=50){ return db.prepare('SELECT * FROM activity ORDER BY id DESC LIMIT ?').all(limit); },
   since(ts){ return db.prepare('SELECT * FROM activity WHERE ts>=? ORDER BY id ASC').all(ts); }
+};
+
+export const Scans = {
+  create({ id, user_id, target, type, command }){
+    const now = Date.now();
+    db.prepare('INSERT INTO scans (id,user_id,target,type,command,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(id,user_id||null,target,type,command,'queued',now,now);
+    return Scans.get(id);
+  },
+  markRunning(id){ db.prepare("UPDATE scans SET status='running', started_at=?, updated_at=? WHERE id=?").run(Date.now(), Date.now(), id); },
+  complete(id, raw, summary, score){ db.prepare("UPDATE scans SET status='completed', completed_at=?, raw_output=?, summary_json=?, score=?, updated_at=? WHERE id=?").run(Date.now(), raw, JSON.stringify(summary||{}), score||0, Date.now(), id); },
+  fail(id, message){ db.prepare("UPDATE scans SET status='failed', completed_at=?, raw_output=?, updated_at=? WHERE id=?").run(Date.now(), message.slice(0,4000), Date.now(), id); },
+  list(limit=100){ return db.prepare('SELECT id,target,type,status,started_at,completed_at,score,created_at,updated_at FROM scans ORDER BY created_at DESC LIMIT ?').all(limit); },
+  get(id){ return db.prepare('SELECT * FROM scans WHERE id=?').get(id); },
+  latestForTarget(target){ return db.prepare('SELECT * FROM scans WHERE target=? ORDER BY created_at DESC LIMIT 20').all(target); },
+  allWithoutSummary(){ return db.prepare("SELECT * FROM scans WHERE status='completed' AND (summary_json IS NULL OR summary_json='')").all(); }
+};
+
+export const ScanRecs = {
+  add(scan_id, text, weight=0){ db.prepare('INSERT INTO scan_recommendations (scan_id, created_at, text, weight) VALUES (?,?,?,?)').run(scan_id, Date.now(), text, weight); },
+  listForScan(scan_id){ return db.prepare('SELECT * FROM scan_recommendations WHERE scan_id=? ORDER BY weight DESC, id ASC').all(scan_id); },
+  markApplied(id){ db.prepare('UPDATE scan_recommendations SET applied=1 WHERE id=?').run(id); }
+};
+
+export const AIMessages = {
+  add(user_id, role, content){ db.prepare('INSERT INTO ai_messages (user_id, ts, role, content) VALUES (?,?,?,?)').run(user_id||null, Date.now(), role, content.slice(0,8000)); },
+  recent(user_id, limit=30){ return db.prepare('SELECT role, content, ts FROM ai_messages WHERE user_id=? ORDER BY id DESC LIMIT ?').all(user_id, limit).reverse(); },
+  truncate(user_id, max=500){ const count = db.prepare('SELECT COUNT(*) as c FROM ai_messages WHERE user_id=?').get(user_id).c; if(count>max){ const toDel = count-max; db.prepare('DELETE FROM ai_messages WHERE user_id=? AND id IN (SELECT id FROM ai_messages WHERE user_id=? ORDER BY id ASC LIMIT ?)').run(user_id,user_id,toDel); } }
+};
+
+export const AITasks = {
+  create({ id, user_id, instruction }){
+    const now = Date.now();
+    db.prepare('INSERT INTO ai_tasks (id,user_id,created_at,updated_at,status,instruction) VALUES (?,?,?,?,?,?)')
+      .run(id,user_id,now,now,'queued',instruction.slice(0,4000));
+    return AITasks.get(id);
+  },
+  get(id){ return db.prepare('SELECT * FROM ai_tasks WHERE id=?').get(id); },
+  list(user_id, limit=50){ return db.prepare('SELECT id,created_at,updated_at,status,instruction FROM ai_tasks WHERE user_id=? ORDER BY created_at DESC LIMIT ?').all(user_id, limit); },
+  setPlan(id, plan){ db.prepare('UPDATE ai_tasks SET plan_json=?, status="running", updated_at=? WHERE id=?').run(JSON.stringify(plan), Date.now(), id); },
+  updatePlan(id, plan){ db.prepare('UPDATE ai_tasks SET plan_json=?, updated_at=? WHERE id=?').run(JSON.stringify(plan), Date.now(), id); },
+  complete(id, result){ db.prepare('UPDATE ai_tasks SET status="completed", result_json=?, updated_at=? WHERE id=?').run(JSON.stringify(result||{}), Date.now(), id); },
+  fail(id, error){ db.prepare('UPDATE ai_tasks SET status="failed", error=?, updated_at=? WHERE id=?').run(error.slice(0,1000), Date.now(), id); },
+  queued(){ return db.prepare('SELECT * FROM ai_tasks WHERE status IN ("queued","running") ORDER BY created_at ASC').all(); }
+};
+
+export const AISettings = {
+  get(){ return db.prepare('SELECT goal,tone,guardrails,updated_at FROM ai_settings WHERE id=1').get(); },
+  update(patch){
+    const current = AISettings.get();
+    const next = {
+      goal: patch.goal !== undefined ? patch.goal : current.goal,
+      tone: patch.tone !== undefined ? patch.tone : current.tone,
+      guardrails: patch.guardrails !== undefined ? patch.guardrails : current.guardrails
+    };
+    db.prepare('UPDATE ai_settings SET goal=?, tone=?, guardrails=?, updated_at=? WHERE id=1').run(next.goal, next.tone, next.guardrails, Date.now());
+    return AISettings.get();
+  }
 };
 
 export function resetAll(){
