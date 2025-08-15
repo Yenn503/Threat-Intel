@@ -5,6 +5,7 @@ import { enqueueScan } from './scanService.js';
 
 let agentLoopRunning = false;
 let loopStarted = false;
+const LOOP_INTERVAL_MS = process.env.NODE_ENV==='test' ? 150 : 3000;
 
 export function planFromInstruction(instr){
   const lower = (instr||'').toLowerCase();
@@ -29,6 +30,16 @@ async function agentLoop(){
     for(const task of work){
       let plan = []; try { plan = JSON.parse(task.plan_json||'[]'); } catch { plan=[]; }
       let mutated = false;
+      // Reconcile running queue-scan steps whose scans have finished
+      for(const qs of plan){
+        if(qs.action==='queue-scan' && qs.status==='running' && qs.scanId){
+          const scan = Scans.get(qs.scanId);
+            if(scan){
+              if(scan.status==='completed'){ qs.status='done'; mutated=true; }
+              else if(scan.status==='failed'){ qs.status='error'; qs.error='scan failed'; mutated=true; }
+            }
+        }
+      }
       for(const step of plan){
         if(step.waitForScan && step.status==='waiting' && step.scanId){
           const scan = Scans.get(step.scanId);
@@ -96,12 +107,17 @@ async function agentLoop(){
     }
   } catch {/* swallow */ }
   agentLoopRunning = false;
-  setTimeout(agentLoop, 3000).unref();
+  setTimeout(agentLoop, LOOP_INTERVAL_MS).unref();
 }
 
 export function startAgentLoop(){
   if(loopStarted) return; loopStarted = true;
-  setTimeout(agentLoop, 3000).unref();
+  if(process.env.NODE_ENV==='test'){
+    // Kick off immediately for faster test progression
+    agentLoop();
+  } else {
+    setTimeout(agentLoop, LOOP_INTERVAL_MS).unref();
+  }
 }
 
 export default { startAgentLoop, planFromInstruction };
