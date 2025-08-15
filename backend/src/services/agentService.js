@@ -31,7 +31,14 @@ export function planFromInstruction(instr){
 
 async function processAgentWork(opts={}){
   const deterministic = opts.deterministic!==undefined ? opts.deterministic : deterministicMode;
-  const maxTransitionsPerTask = deterministic ? 1 : Infinity;
+  let maxTransitionsPerTask;
+  const cfg = parseInt(process.env.AGENT_MAX_TRANSITIONS_PER_TICK||'',10);
+  if(Number.isFinite(cfg) && cfg>0){
+    // In deterministic mode we still cap to 1 to preserve single-step semantics
+    maxTransitionsPerTask = deterministic ? Math.min(cfg,1) : cfg;
+  } else {
+    maxTransitionsPerTask = deterministic ? 1 : Infinity;
+  }
   let overallTransitions = 0;
   const work = AITasks.queued();
   for(const task of work){

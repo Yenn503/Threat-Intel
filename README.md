@@ -141,6 +141,7 @@ Additional runtime environment variables (advanced):
 AGENT_DEADLOCK_MS=300000   # Milliseconds before a task with no runnable pending steps is marked deadlocked (default 300000 = 5m). Lower in tests.
 AGENT_NON_DETERMINISTIC=1  # (Optional) Disable deterministic single-step scheduling in tests; by default tests run deterministically.
 SCAN_FAKE_DELAY_MS=5       # Delay (ms) for simulated scans in test / no-real-scan mode. Tune to >0 to exercise async; keep small for speed.
+AGENT_MAX_TRANSITIONS_PER_TICK=5 # (Optional) Hard cap on per-task transitions each scheduler tick (non-deterministic mode only).
 
 # Target Safety
 TARGET_ALLOWLIST=scanme.nmap.org,*.example.com  # If set, only listed hosts (or matching wildcard suffix) are permitted for scans/tools.
