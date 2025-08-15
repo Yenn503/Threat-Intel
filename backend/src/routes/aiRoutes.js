@@ -5,6 +5,7 @@ import { llmChat, llmEnabled } from '../llm_client.js';
 import { tools, toolManifest, executeToolStep } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
 import { planFromInstruction } from '../services/agentService.js';
+import { sanitizePlan } from '../planValidation.js';
 
 // Extracted AI & Agent routes
 export function registerAIRoutes(app, { authMiddleware, adminMiddleware, record }) {
@@ -86,13 +87,13 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
     } else {
       llmRaw = '[LLM disabled: set GEMINI_API_KEY]';
     }
-    if(!plan.length){
+  if(!plan.length){
       const hostMatch = prompt.match(/\b([A-Za-z0-9_.-]{3,})\b/);
       if(hostMatch && /scan|nmap|recon|enumerate/i.test(prompt)){
         plan = [{ tool:'nmap_scan', args:{ target: hostMatch[1], flags:'-F' } }, { tool:'summarize_target', args:{ target: hostMatch[1] } }];
       }
     }
-    plan = plan.filter(s=> s && tools[s.tool]);
+  plan = sanitizePlan(plan.filter(s=> s && tools[s.tool]));
     const answerText = llmRaw.replace(/>>>PLAN[\s\S]*?<<<PLAN/g,'').trim();
     let executed=false; let taskId=null;
     if(plan.length && autoplan){
@@ -123,18 +124,18 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
         if(m){ try { plan = JSON.parse(m[1]); } catch { plan=[]; } }
       } catch {/* swallow */}
     }
-    if(!Array.isArray(plan) || !plan.length){
+  if(!Array.isArray(plan) || !plan.length){
       const hostMatch = instruction.match(/([a-zA-Z0-9_.-]{3,})/);
       if(hostMatch){ plan = [{ tool:'nmap_scan', args:{ target: hostMatch[1], flags:'-F' } }, { tool:'summarize_target', args:{ target: hostMatch[1] } }]; }
     }
-    plan = plan.filter(s=> s && tools[s.tool]);
+  plan = sanitizePlan(plan.filter(s=> s && tools[s.tool]));
     res.json({ ok:true, plan, llm: usedLLM && llmEnabled() });
   });
 
   // agent/execute
   router.post('/agent/execute', authMiddleware, (req,res)=>{
     const { instruction, plan } = req.body || {}; if(!instruction || !Array.isArray(plan) || !plan.length) return res.status(400).json({ error:'instruction & plan required'});
-    const filtered = plan.filter(s=> s && tools[s.tool]); if(!filtered.length) return res.status(400).json({ error:'no valid steps'});
+  const filtered = sanitizePlan(plan.filter(s=> s && tools[s.tool])); if(!filtered.length) return res.status(400).json({ error:'no valid steps'});
     const id = uuidv4();
     AITasks.create({ id, user_id:req.user.id, instruction });
     const steps = filtered.map((s,i)=> ({ idx:i, status:'pending', tool:s.tool, args:s.args||{} }));

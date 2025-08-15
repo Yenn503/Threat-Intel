@@ -127,7 +127,18 @@ Backend `.env` example:
 PORT=4000
 JWT_SECRET=change_me
 HIBP_API_KEY=
+
+# LLM (Gemini) Integration
+# Obtain an API key: https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=
+# Optional: override model (default gemini-1.5-flash). Other examples: gemini-1.5-pro
+GEMINI_MODEL=
 ```
+
+LLM notes:
+- If `GEMINI_API_KEY` is unset the assistant falls back to a disabled notice and only basic agent actions work.
+- All model prompts are single-turn compiled with a short recent chat window + scan context; no external memory store yet.
+- Returned JSON command blocks (between >>>JSON / <<<JSON) are parsed and queued as scans when safe.
 
 ## Scripts
 Backend:
@@ -147,6 +158,34 @@ npm run preview  # preview production build
 - Monaco editor workers auto-configured; adjust Vite config if deploying under subpath.
 - OSINT JSON currently a trimmed placeholder (`frontend/src/osint-arf.json`). Replace with full dataset for production.
 - Radial view uses canvas for performance; tree uses SVG for crisp text & accessibility.
+
+### Test Mode & Agent Execution
+
+Backend test suite runs the AI agent and scan queue without real Nmap / Nuclei by injecting a fake scan executor.
+
+Flags / Env:
+- `NODE_ENV=test` enables fast agent loop interval (150ms) for rapid task progression.
+- `DISABLE_AUTO_AGENT_LOOP=1` (set in tests) prevents the loop from auto‑starting so a test can inject a custom executor first.
+- `ENABLE_LLM_TESTS=1` opt‑in to actually call the LLM during tests (default off to keep CI deterministic).
+
+Injected Executor:
+```js
+import scanService from '../services/scanService.js';
+scanService.setExecutor(async (task) => {
+  Scans.markRunning(task.id);
+  // Provide synthetic summary per scan type
+  const summary = task.type==='nmap' ? { openPorts:[{ port:80, service:'http'}], openCount:1 } : { findings:[] };
+  Scans.complete(task.id, 'FAKE_OUTPUT', summary, 10);
+});
+```
+This pattern isolates queue mechanics from external binaries and keeps tests fast & hermetic.
+
+Agent Tests Cover:
+- Task lifecycle via shorthand instruction (`/api/ai/agent/tasks`).
+- Manual plan execution (`/api/ai/agent/execute`).
+- Basic step transition snapshots.
+
+When real scanners are available simply omit `setExecutor` and provide `NMAP_PATH` / `NUCLEI_PATH` in `.env`.
 
 ## Roadmap
 | Milestone | Focus | Key Items |
