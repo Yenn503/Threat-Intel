@@ -55,8 +55,9 @@ export function queueDepth(){ return scanQueue.length; }
 // In test mode or when real scans disabled, install a stub executor that auto-completes quickly.
 if(process.env.NODE_ENV==='test' || process.env.ENABLE_REAL_SCANS!=='1'){
   setScanExecutor(async (task)=>{
-    // Simulated minimal delay
-    await new Promise(r=> setTimeout(r,5));
+    // Configurable minimal delay to keep suite fast while still exercising async paths
+    const delayMs = parseInt(process.env.SCAN_FAKE_DELAY_MS || '5', 10);
+    if(delayMs>0) await new Promise(r=> setTimeout(r, Math.min(delayMs, 1000))); // clamp just in case
     Scans.markRunning(task.id);
     const fakeSummary = task.type==='nmap' ? { openPorts:[{ port:80, service:'http'}], openCount:1 } : { findings:[] };
     Scans.complete(task.id, 'SIMULATED_OUTPUT', fakeSummary, 10);

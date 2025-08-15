@@ -21,9 +21,20 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: npm ci
-      - name: Run tests
+      - name: Unit tests (deterministic)
         working-directory: backend
         env:
           NODE_ENV: test
           ENABLE_LLM_TESTS: '0'
-        run: npm test
+          CI: '1'
+          SCAN_FAKE_DELAY_MS: '5'
+        run: npm run test:ci
+      - name: Stability loop (3x)
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          ENABLE_LLM_TESTS: '0'
+          CI: '1'
+          STABILITY_LOOPS: '3'
+          SCAN_FAKE_DELAY_MS: '5'
+        run: npm run test:stability

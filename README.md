@@ -140,6 +140,7 @@ Additional runtime environment variables (advanced):
 # Agent Orchestrator
 AGENT_DEADLOCK_MS=300000   # Milliseconds before a task with no runnable pending steps is marked deadlocked (default 300000 = 5m). Lower in tests.
 AGENT_NON_DETERMINISTIC=1  # (Optional) Disable deterministic single-step scheduling in tests; by default tests run deterministically.
+SCAN_FAKE_DELAY_MS=5       # Delay (ms) for simulated scans in test / no-real-scan mode. Tune to >0 to exercise async; keep small for speed.
 
 # Target Safety
 TARGET_ALLOWLIST=scanme.nmap.org,*.example.com  # If set, only listed hosts (or matching wildcard suffix) are permitted for scans/tools.
@@ -166,6 +167,8 @@ Backend:
 npm run dev      # watch mode
 npm start        # production start
 npm test         # node test runner
+npm run test:ci  # CI guarded deterministic run (fails if non-deterministic enabled)
+npm run test:stability  # Executes suite multiple times (set STABILITY_LOOPS, default 3) to detect flakiness
 ```
 Frontend:
 ```bash

@@ -6,10 +6,12 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-  "dev": "node --watch src/start.js",
-  "start": "node src/start.js",
-  "test": "node --test --test-reporter tap",
-  "test:watch": "node --test --watch --test-reporter tap"
+    "dev": "node --watch src/start.js",
+    "start": "node src/start.js",
+    "test": "node --test --test-reporter tap",
+    "test:watch": "node --test --watch --test-reporter tap",
+    "test:ci": "node scripts/ci-guard.js && node --test --test-reporter tap",
+    "test:stability": "node scripts/stability-runner.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
