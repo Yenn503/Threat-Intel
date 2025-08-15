@@ -1,5 +1,7 @@
 process.env.NODE_ENV = 'test';
 process.env.ENABLE_LLM_TESTS = '0';
+import { isolateDb } from './testEnvUtils.js';
+await isolateDb('aiRoutes');
 globalThis.__TESTING__ = true;
 import test from 'node:test';
 import assert from 'node:assert';

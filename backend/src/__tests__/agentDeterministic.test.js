@@ -1,9 +1,9 @@
 process.env.NODE_ENV='test';
 process.env.ENABLE_LLM_TESTS='0';
 process.env.DISABLE_AUTO_AGENT_LOOP='1';
-import { isolateDb, addAllowlistHosts, ensureHighDefaultLimits } from './testEnvUtils.js';
+import { isolateDb, addStandardTestHosts, ensureHighDefaultLimits } from './testEnvUtils.js';
 await isolateDb('agentDeterministic');
-addAllowlistHosts(['scanme.nmap.org']);
+addStandardTestHosts();
 ensureHighDefaultLimits();
 
 import test from 'node:test';

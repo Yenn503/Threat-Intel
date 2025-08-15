@@ -1,9 +1,9 @@
 process.env.NODE_ENV='test';
 process.env.ENABLE_LLM_TESTS='0';
 process.env.DISABLE_AUTO_AGENT_LOOP='1';
-import { addAllowlistHosts, ensureHighDefaultLimits, isolateDb } from './testEnvUtils.js';
+import { addStandardTestHosts, ensureHighDefaultLimits, isolateDb } from './testEnvUtils.js';
 await isolateDb('agentStepTransitions');
-addAllowlistHosts(['scanme.nmap.org','toolflow.test','ratelimit1.test','ratelimit2.test','validate.test','validate-*']);
+addStandardTestHosts(['validate-*']);
 ensureHighDefaultLimits();
 import test from 'node:test';
 import assert from 'node:assert';

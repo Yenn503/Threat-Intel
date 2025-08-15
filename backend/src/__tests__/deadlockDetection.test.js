@@ -1,6 +1,8 @@
 process.env.NODE_ENV='test';
 process.env.ENABLE_LLM_TESTS='0';
 process.env.DISABLE_AUTO_AGENT_LOOP='1';
+import { isolateDb } from './testEnvUtils.js';
+await isolateDb('deadlockDetection');
 // Set a very small deadlock timeout so the circular dependency triggers failure quickly
 process.env.AGENT_DEADLOCK_MS='300';
 import test from 'node:test';

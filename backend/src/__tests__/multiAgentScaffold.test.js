@@ -1,6 +1,8 @@
 process.env.NODE_ENV='test';
 process.env.ENABLE_LLM_TESTS='0';
 process.env.DISABLE_AUTO_AGENT_LOOP='1';
+import { isolateDb } from './testEnvUtils.js';
+await isolateDb('multiAgentScaffold');
 import test from 'node:test';
 import assert from 'node:assert';
 import request from 'supertest';

@@ -1,4 +1,6 @@
 process.env.NODE_ENV = 'test';
+import { isolateDb } from './testEnvUtils.js';
+await isolateDb('scanRoutes');
 globalThis.__TESTING__ = true;
 import test from 'node:test';
 import assert from 'node:assert';

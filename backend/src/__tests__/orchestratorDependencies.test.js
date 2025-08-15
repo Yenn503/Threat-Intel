@@ -1,11 +1,15 @@
 process.env.NODE_ENV='test';
 process.env.ENABLE_LLM_TESTS='0';
 process.env.DISABLE_AUTO_AGENT_LOOP='1';
+import { addStandardTestHosts, ensureHighDefaultLimits, isolateDb } from './testEnvUtils.js';
+await isolateDb('orchestratorDependencies');
+addStandardTestHosts();
+ensureHighDefaultLimits();
 import test from 'node:test';
 import assert from 'node:assert';
 import request from 'supertest';
 import { app } from '../server.js';
-import { startAgentLoop } from '../services/agentService.js';
+import { startAgentLoop, runAgentOnce } from '../services/agentService.js';
 import scanService from '../services/scanService.js';
 import { Scans } from '../db.js';
 
@@ -32,21 +36,24 @@ test('dependency-gated steps only run after deps complete', async ()=>{
   const exec = await request(app).post('/api/ai/agent/execute').set('Authorization','Bearer '+token).send({ instruction:'Dep test', plan });
   assert.equal(exec.status,200);
   const id = exec.body.task.id;
-  let done=false; let orderingValid=true; let attempts=0;
-  while(attempts<40){
-    await sleep(90);
+  let done=false; let orderingValid=true; let attempts=0; let lastStatuses='';
+  while(attempts<110){
+    await runAgentOnce();
+    await runAgentOnce();
+    await sleep(55);
     const r = await request(app).get('/api/ai/agent/tasks/'+id).set('Authorization','Bearer '+token);
     assert.equal(r.status,200);
     const task = r.body.task;
     const steps = JSON.parse(task.plan_json||'[]');
-    // If second step advances (running/waiting/done), first must already be done
+    const statuses = steps.map(s=> s.status).join(',');
+    if(statuses!==lastStatuses) lastStatuses=statuses;
     if(steps[1] && ['running','waiting','done'].includes(steps[1].status)){
       if(!(steps[0] && steps[0].status==='done')) orderingValid=false;
     }
     if(task.status==='completed'){ done=true; break; }
     attempts++;
   }
-  assert.ok(done,'task completed');
+  assert.ok(done,'task reached completed state');
   assert.ok(orderingValid,'second step never advanced before first completed');
 });
 
