@@ -24,6 +24,24 @@ export function normalizeMultiAgentPlan(rawSteps){
   return rawSteps.map((s,i)=> ({ ...s, agent: s.agent || pickAgentForStep(s) || DEFAULT_AGENT, idx: s.idx!==undefined? s.idx : i }));
 }
 
+// Static cycle detection (simple DFS over dependsOn graph)
+export function detectPlanCycle(steps){
+  const map = new Map(); steps.forEach(s=> map.set(s.idx ?? s.step, s));
+  const visiting = new Set(); const visited = new Set();
+  function dfs(nodeId){
+    if(visiting.has(nodeId)) return true; // cycle
+    if(visited.has(nodeId)) return false;
+    visiting.add(nodeId);
+    const s = map.get(nodeId); if(s){
+      const deps = Array.isArray(s.dependsOn)? s.dependsOn: [];
+      for(const d of deps){ if(dfs(d)) return true; }
+    }
+    visiting.delete(nodeId); visited.add(nodeId); return false;
+  }
+  for(const id of map.keys()){ if(dfs(id)) return true; }
+  return false;
+}
+
 function pickAgentForStep(step){
   // Determine agent by ownership predicate
   for(const [id, def] of Object.entries(agentRegistry)){
@@ -57,4 +75,4 @@ export function canRunStep(step, plan){
   return (counts[step.agent]||0) < def.concurrency;
 }
 
-export default { normalizeMultiAgentPlan, nextRunnableSteps, listAgents, canRunStep };
+export default { normalizeMultiAgentPlan, nextRunnableSteps, listAgents, canRunStep, detectPlanCycle };

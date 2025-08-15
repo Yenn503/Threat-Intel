@@ -135,6 +135,25 @@ GEMINI_API_KEY=
 GEMINI_MODEL=
 ```
 
+Additional runtime environment variables (advanced):
+```
+# Agent Orchestrator
+AGENT_DEADLOCK_MS=300000   # Milliseconds before a task with no runnable pending steps is marked deadlocked (default 300000 = 5m). Lower in tests.
+
+# Target Safety
+TARGET_ALLOWLIST=scanme.nmap.org,*.example.com  # If set, only listed hosts (or matching wildcard suffix) are permitted for scans/tools.
+```
+
+Health Endpoint (`/api/ai/health`) now returns:
+```
+{
+  ok: true,
+  llm: boolean,
+  allowlist: ["scanme.nmap.org", "*.example.com"],
+  deadlockTimeout: 300000
+}
+```
+
 LLM notes:
 - If `GEMINI_API_KEY` is unset the assistant falls back to a disabled notice and only basic agent actions work.
 - All model prompts are single-turn compiled with a short recent chat window + scan context; no external memory store yet.

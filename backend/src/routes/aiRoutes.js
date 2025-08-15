@@ -6,7 +6,7 @@ import { tools, toolManifest, executeToolStep } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
 import { planFromInstruction } from '../services/agentService.js';
 import { sanitizePlan, validatePlanSteps } from '../planValidation.js';
-import { normalizeMultiAgentPlan, listAgents } from '../services/orchestratorService.js';
+import { normalizeMultiAgentPlan, listAgents, detectPlanCycle } from '../services/orchestratorService.js';
 import { getTargetAllowlist } from '../constants.js';
 
 // Extracted AI & Agent routes
@@ -64,7 +64,7 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
 
   // history
   router.get('/history', authMiddleware, (req,res)=>{ res.json({ ok:true, history: AIMessages.recent(req.user.id) }); });
-  router.get('/health', authMiddleware, (req,res)=>{ res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist() }); });
+  router.get('/health', authMiddleware, (req,res)=>{ const deadlockTimeout = parseInt(process.env.AGENT_DEADLOCK_MS||'',10) || (5*60*1000); res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist(), deadlockTimeout }); });
   // Intentional test error route to validate error middleware (harmless generic error)
   router.get('/_test/error', authMiddleware, (req,res)=>{ throw new Error('boom'); });
   router.get('/debug/llm', authMiddleware, (req,res)=>{
@@ -144,6 +144,7 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
   router.post('/agent/execute', authMiddleware, (req,res)=>{
     const { instruction, plan } = req.body || {}; if(!instruction || !Array.isArray(plan) || !plan.length) return res.status(400).json({ error:'instruction & plan required'});
   const filtered = validatePlanSteps(plan.filter(s=> s && (s.tool? tools[s.tool]:true)), tools); if(!filtered.length) return res.status(400).json({ error:'no valid steps'});
+    const prelim = filtered.map((s,i)=> ({ idx:i, ...s })); if(detectPlanCycle(prelim)) return res.status(400).json({ error:'plan has cyclic dependencies'});
     const id = uuidv4();
     AITasks.create({ id, user_id:req.user.id, instruction });
     const steps = normalizeMultiAgentPlan(filtered.map((s,i)=> ({ idx:i, status:'pending', tool:s.tool, args:s.args||{},
