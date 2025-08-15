@@ -181,11 +181,11 @@ export const AITasks = {
   },
   get(id){ return db.prepare('SELECT * FROM ai_tasks WHERE id=?').get(id); },
   list(user_id, limit=50){ return db.prepare('SELECT id,created_at,updated_at,status,instruction FROM ai_tasks WHERE user_id=? ORDER BY created_at DESC LIMIT ?').all(user_id, limit); },
-  setPlan(id, plan){ db.prepare('UPDATE ai_tasks SET plan_json=?, status="running", updated_at=? WHERE id=?').run(JSON.stringify(plan), Date.now(), id); },
+  setPlan(id, plan){ db.prepare("UPDATE ai_tasks SET plan_json=?, status='running', updated_at=? WHERE id=?").run(JSON.stringify(plan), Date.now(), id); },
   updatePlan(id, plan){ db.prepare('UPDATE ai_tasks SET plan_json=?, updated_at=? WHERE id=?').run(JSON.stringify(plan), Date.now(), id); },
-  complete(id, result){ db.prepare('UPDATE ai_tasks SET status="completed", result_json=?, updated_at=? WHERE id=?').run(JSON.stringify(result||{}), Date.now(), id); },
-  fail(id, error){ db.prepare('UPDATE ai_tasks SET status="failed", error=?, updated_at=? WHERE id=?').run(error.slice(0,1000), Date.now(), id); },
-  queued(){ return db.prepare('SELECT * FROM ai_tasks WHERE status IN ("queued","running") ORDER BY created_at ASC').all(); }
+  complete(id, result){ db.prepare("UPDATE ai_tasks SET status='completed', result_json=?, updated_at=? WHERE id=?").run(JSON.stringify(result||{}), Date.now(), id); },
+  fail(id, error){ db.prepare("UPDATE ai_tasks SET status='failed', error=?, updated_at=? WHERE id=?").run(error.slice(0,1000), Date.now(), id); },
+  queued(){ return db.prepare("SELECT * FROM ai_tasks WHERE status IN ('queued','running') ORDER BY created_at ASC").all(); }
 };
 
 export const AISettings = {

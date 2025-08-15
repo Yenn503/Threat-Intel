@@ -5,7 +5,8 @@ import { llmChat, llmEnabled } from '../llm_client.js';
 import { tools, toolManifest, executeToolStep } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
 import { planFromInstruction } from '../services/agentService.js';
-import { sanitizePlan } from '../planValidation.js';
+import { sanitizePlan, validatePlanSteps } from '../planValidation.js';
+import { normalizeMultiAgentPlan, listAgents } from '../services/orchestratorService.js';
 
 // Extracted AI & Agent routes
 export function registerAIRoutes(app, { authMiddleware, adminMiddleware, record }) {
@@ -68,6 +69,7 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
     res.json({ ok:true, llm: llmEnabled(), model: process.env.GEMINI_MODEL||null, keyPresent: !!key, keyMasked: masked });
   });
   router.get('/tools', authMiddleware, (req,res)=>{ res.json({ ok:true, tools: toolManifest() }); });
+  router.get('/agents', authMiddleware, (req,res)=>{ res.json({ ok:true, agents: listAgents() }); });
 
   // agent/chat autoplan
   router.post('/agent/chat', authMiddleware, async (req,res)=>{
@@ -93,13 +95,16 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
         plan = [{ tool:'nmap_scan', args:{ target: hostMatch[1], flags:'-F' } }, { tool:'summarize_target', args:{ target: hostMatch[1] } }];
       }
     }
-  plan = sanitizePlan(plan.filter(s=> s && tools[s.tool]));
+  plan = validatePlanSteps(plan.filter(s=> s && (s.tool? tools[s.tool]:true)), tools);
     const answerText = llmRaw.replace(/>>>PLAN[\s\S]*?<<<PLAN/g,'').trim();
     let executed=false; let taskId=null;
     if(plan.length && autoplan){
       const id = uuidv4(); taskId=id; executed=true;
       AITasks.create({ id, user_id:req.user.id, instruction: prompt });
-      const steps = plan.map((s,i)=> ({ idx:i, status:'pending', tool:s.tool, args:s.args||{} }));
+      const steps = normalizeMultiAgentPlan(plan.map((s,i)=> ({ idx:i, status:'pending', tool:s.tool, args:s.args||{},
+        ...(s.dependsOn? { dependsOn: Array.isArray(s.dependsOn)? s.dependsOn.slice(0,20): [] }:{}),
+        ...(s.agent? { agent: s.agent }: {})
+      })));
       AITasks.setPlan(id, steps);
       AIMessages.add(req.user.id,'assistant', answerText ? (answerText + `\n\n[Executing ${steps.length} step plan]`) : `Executing ${steps.length} step plan: ${steps.map(s=>s.tool).join(' -> ')}`);
     } else {
@@ -128,17 +133,20 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
       const hostMatch = instruction.match(/([a-zA-Z0-9_.-]{3,})/);
       if(hostMatch){ plan = [{ tool:'nmap_scan', args:{ target: hostMatch[1], flags:'-F' } }, { tool:'summarize_target', args:{ target: hostMatch[1] } }]; }
     }
-  plan = sanitizePlan(plan.filter(s=> s && tools[s.tool]));
+  plan = validatePlanSteps(plan.filter(s=> s && (s.tool? tools[s.tool]:true)), tools);
     res.json({ ok:true, plan, llm: usedLLM && llmEnabled() });
   });
 
   // agent/execute
   router.post('/agent/execute', authMiddleware, (req,res)=>{
     const { instruction, plan } = req.body || {}; if(!instruction || !Array.isArray(plan) || !plan.length) return res.status(400).json({ error:'instruction & plan required'});
-  const filtered = sanitizePlan(plan.filter(s=> s && tools[s.tool])); if(!filtered.length) return res.status(400).json({ error:'no valid steps'});
+  const filtered = validatePlanSteps(plan.filter(s=> s && (s.tool? tools[s.tool]:true)), tools); if(!filtered.length) return res.status(400).json({ error:'no valid steps'});
     const id = uuidv4();
     AITasks.create({ id, user_id:req.user.id, instruction });
-    const steps = filtered.map((s,i)=> ({ idx:i, status:'pending', tool:s.tool, args:s.args||{} }));
+    const steps = normalizeMultiAgentPlan(filtered.map((s,i)=> ({ idx:i, status:'pending', tool:s.tool, args:s.args||{},
+      ...(s.dependsOn? { dependsOn: Array.isArray(s.dependsOn)? s.dependsOn.slice(0,20): [] }:{}),
+      ...(s.agent? { agent: s.agent }: {})
+    })));
     AITasks.setPlan(id, steps);
     res.json({ ok:true, task: AITasks.get(id) });
   });
@@ -158,7 +166,9 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
     if(!plan) return res.status(400).json({ error:'unsupported instruction'});
     const id = uuidv4();
     AITasks.create({ id, user_id:req.user.id, instruction });
-    AITasks.setPlan(id, plan);
+  // Tag steps with agents for forward compatibility
+  const tagged = normalizeMultiAgentPlan(plan.map((s,i)=> ({ ...s, idx:i, ...(s.dependsOn? { dependsOn: Array.isArray(s.dependsOn)? s.dependsOn.slice(0,20): [] }:{}), ...(s.agent? { agent:s.agent }: {}) })));
+  AITasks.setPlan(id, tagged);
     res.json({ ok:true, task: AITasks.get(id) });
   });
   router.get('/agent/tasks', authMiddleware, (req,res)=>{ res.json({ ok:true, tasks: AITasks.list(req.user.id) }); });

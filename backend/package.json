@@ -2,27 +2,31 @@
   "name": "threat-intel-backend",
   "version": "0.1.0",
   "type": "module",
-  "engines": { "node": ">=18.0.0" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
-    "test": "NODE_ENV=test node --test",
-    "test:watch": "NODE_ENV=test node --test --watch"
+  "dev": "node --watch src/start.js",
+  "start": "node src/start.js",
+  "test": "node --test --test-reporter tap",
+  "test:watch": "node --test --watch --test-reporter tap"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^9.4.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.2.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
-  "p-limit": "^4.0.0",
-  "ws": "^8.18.0",
-  "uuid": "^9.0.1",
-  "bcryptjs": "^2.4.3",
-  "jsonwebtoken": "^9.0.2",
-  "better-sqlite3": "^9.4.0",
-  "helmet": "^7.1.0"
+    "p-limit": "^4.0.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "supertest": "^6.3.4"
   }
 }

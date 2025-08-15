@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db, Scans, ScanRecs, AIMessages, AITasks } from '../db.js';
 import { executeToolStep } from '../aiTools.js';
 import { enqueueScan } from './scanService.js';
+import { nextRunnableSteps, canRunStep } from './orchestratorService.js';
 
 let agentLoopRunning = false;
 let loopStarted = false;
@@ -40,7 +41,18 @@ async function agentLoop(){
             }
         }
       }
-      for(const step of plan){
+  // Multi-agent dependency + concurrency aware selection
+      const runnable = nextRunnableSteps(plan).filter(s=> canRunStep(s, plan));
+      const iterationSet = runnable.length? runnable : plan;
+      for(const step of iterationSet){
+        // If not runnable due to dependency (in fallback path), continue
+        if(step.status==='pending' && Array.isArray(step.dependsOn) && step.dependsOn.length){
+          const unmet = step.dependsOn.some(d=> {
+            const dep = plan.find(p=> (p.idx===d || p.step===d));
+            return !dep || dep.status!=='done';
+          });
+            if(unmet && runnable.length===0) continue; // fallback path skip
+        }
         if(step.waitForScan && step.status==='waiting' && step.scanId){
           const scan = Scans.get(step.scanId);
           if(scan){
@@ -56,7 +68,7 @@ async function agentLoop(){
           }
           continue;
         }
-        if(step.status!=='pending') continue;
+  if(step.status!=='pending') continue;
         if(step.tool){
           try {
             step.status='running'; mutated=true; AITasks.updatePlan(task.id, plan);
