@@ -68,7 +68,8 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
   router.get('/health', authMiddleware, (req,res)=>{ 
     const deadlockTimeout = parseInt(process.env.AGENT_DEADLOCK_MS||'',10) || (5*60*1000);
     const maxPerTick = parseInt(process.env.AGENT_MAX_TRANSITIONS_PER_TICK||'',10) || null;
-    res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist(), deadlockTimeout, deterministicMode: isDeterministicAgentMode(), maxTransitionsPerTick: maxPerTick }); 
+    const manifest = toolManifest();
+    res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist(), deadlockTimeout, deterministicMode: isDeterministicAgentMode(), maxTransitionsPerTick: maxPerTick, tools: { count: manifest.length, ids: manifest.map(t=> t.id) } }); 
   });
   // Intentional test error route to validate error middleware (harmless generic error)
   router.get('/_test/error', authMiddleware, (req,res)=>{ throw new Error('boom'); });
