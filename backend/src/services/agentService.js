@@ -32,20 +32,10 @@ async function agentLoop(){
     for(const task of work){
       let plan = []; try { plan = JSON.parse(task.plan_json||'[]'); } catch { plan=[]; }
       let mutated = false;
-      // Deadlock detection: if plan has pending steps but no runnable ones for prolonged period
-      const now = Date.now();
-      const DEADLOCK_MS = 5*60*1000; // 5 minutes safe default
-      const hasPending = plan.some(s=> s.status==='pending');
-      if(hasPending){
-        // If we previously marked a timestamp, check elapsed
-        for(const s of plan){ if(s.status==='pending' && !s.firstSeenPending){ s.firstSeenPending = now; mutated=true; } }
-        const stuck = plan.filter(s=> s.status==='pending' && s.firstSeenPending && (now - s.firstSeenPending) > DEADLOCK_MS);
-        if(stuck.length){
-          AITasks.fail(task.id, 'deadlock: pending steps exceeded timeout');
-          AIMessages.add(task.user_id,'assistant', 'Task failed: dependency deadlock detected.');
-          continue; // move to next task
-        }
-      }
+  // Deadlock detection: only track pending steps when there are NONE runnable this iteration.
+  const now = Date.now();
+  let DEADLOCK_MS = parseInt(process.env.AGENT_DEADLOCK_MS,10);
+  if(!Number.isFinite(DEADLOCK_MS) || DEADLOCK_MS <= 0){ DEADLOCK_MS = 5*60*1000; }
       // Reconcile running queue-scan steps whose scans have finished
       for(const qs of plan){
         if(qs.action==='queue-scan' && qs.status==='running' && qs.scanId){
@@ -58,6 +48,20 @@ async function agentLoop(){
       }
   // Multi-agent dependency + concurrency aware selection
       const runnable = nextRunnableSteps(plan).filter(s=> canRunStep(s, plan));
+      const hasRunnable = runnable.length>0;
+      const hasPending = plan.some(s=> s.status==='pending');
+      if(hasPending && !hasRunnable){
+        for(const s of plan){ if(s.status==='pending'){ if(!s.firstSeenPending){ s.firstSeenPending=now; mutated=true; } } }
+        const stuck = plan.filter(s=> s.status==='pending' && s.firstSeenPending && (now - s.firstSeenPending) > DEADLOCK_MS);
+        if(stuck.length){
+          AITasks.fail(task.id, 'deadlock: pending steps exceeded timeout');
+          AIMessages.add(task.user_id,'assistant', 'Task failed: dependency deadlock detected.');
+          continue;
+        }
+      } else if(hasRunnable){
+        // Reset firstSeenPending on steps that became runnable again to avoid false positives
+        for(const s of plan){ if(s.status==='pending' && s.firstSeenPending) delete s.firstSeenPending; }
+      }
       const iterationSet = runnable.length? runnable : plan;
       for(const step of iterationSet){
         // If not runnable due to dependency (in fallback path), continue

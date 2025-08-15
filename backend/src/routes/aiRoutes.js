@@ -7,7 +7,7 @@ import { enqueueScan } from '../services/scanService.js';
 import { planFromInstruction } from '../services/agentService.js';
 import { sanitizePlan, validatePlanSteps } from '../planValidation.js';
 import { normalizeMultiAgentPlan, listAgents } from '../services/orchestratorService.js';
-import { TARGET_ALLOWLIST } from '../constants.js';
+import { getTargetAllowlist } from '../constants.js';
 
 // Extracted AI & Agent routes
 export function registerAIRoutes(app, { authMiddleware, adminMiddleware, record, ah }) {
@@ -64,7 +64,7 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
 
   // history
   router.get('/history', authMiddleware, (req,res)=>{ res.json({ ok:true, history: AIMessages.recent(req.user.id) }); });
-  router.get('/health', authMiddleware, (req,res)=>{ res.json({ ok:true, llm: llmEnabled(), allowlist: TARGET_ALLOWLIST }); });
+  router.get('/health', authMiddleware, (req,res)=>{ res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist() }); });
   // Intentional test error route to validate error middleware (harmless generic error)
   router.get('/_test/error', authMiddleware, (req,res)=>{ throw new Error('boom'); });
   router.get('/debug/llm', authMiddleware, (req,res)=>{
