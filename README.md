@@ -148,12 +148,7 @@ TARGET_ALLOWLIST=scanme.nmap.org,*.example.com  # If set, only listed hosts (or 
 
 Health Endpoint (`/api/ai/health`) now returns:
 ```
-{
-  ok: true,
-  llm: boolean,
-  allowlist: ["scanme.nmap.org", "*.example.com"],
-  deadlockTimeout: 300000
-}
+{ ok: true, llm: boolean, allowlist: [...], deadlockTimeout: 300000, deterministicMode: true }
 ```
 
 LLM notes:
@@ -169,6 +164,7 @@ npm start        # production start
 npm test         # node test runner
 npm run test:ci  # CI guarded deterministic run (fails if non-deterministic enabled)
 npm run test:stability  # Executes suite multiple times (set STABILITY_LOOPS, default 3) to detect flakiness
+npm run test:timing     # Outputs timing summary (set TIMING_LOOPS for multiple)
 ```
 Frontend:
 ```bash

@@ -4,7 +4,7 @@ import { db, Scans, ScanRecs, AIMessages, AITasks, AISettings } from '../db.js';
 import { llmChat, llmEnabled } from '../llm_client.js';
 import { tools, toolManifest, executeToolStep } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
-import { planFromInstruction } from '../services/agentService.js';
+import { planFromInstruction, isDeterministicAgentMode } from '../services/agentService.js';
 import { sanitizePlan, validatePlanSteps } from '../planValidation.js';
 import { normalizeMultiAgentPlan, listAgents, detectPlanCycle } from '../services/orchestratorService.js';
 import { computeTaskTimeline } from '../services/metricsService.js';
@@ -65,7 +65,7 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
 
   // history
   router.get('/history', authMiddleware, (req,res)=>{ res.json({ ok:true, history: AIMessages.recent(req.user.id) }); });
-  router.get('/health', authMiddleware, (req,res)=>{ const deadlockTimeout = parseInt(process.env.AGENT_DEADLOCK_MS||'',10) || (5*60*1000); res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist(), deadlockTimeout }); });
+  router.get('/health', authMiddleware, (req,res)=>{ const deadlockTimeout = parseInt(process.env.AGENT_DEADLOCK_MS||'',10) || (5*60*1000); res.json({ ok:true, llm: llmEnabled(), allowlist: getTargetAllowlist(), deadlockTimeout, deterministicMode: isDeterministicAgentMode() }); });
   // Intentional test error route to validate error middleware (harmless generic error)
   router.get('/_test/error', authMiddleware, (req,res)=>{ throw new Error('boom'); });
   router.get('/debug/llm', authMiddleware, (req,res)=>{

@@ -11,6 +11,7 @@ const LOOP_INTERVAL_MS = process.env.NODE_ENV==='test' ? 150 : 3000;
 let deterministicMode = process.env.AGENT_NON_DETERMINISTIC==='1' ? false : (process.env.NODE_ENV==='test');
 
 export function setDeterministicAgentMode(v){ deterministicMode = !!v; }
+export function isDeterministicAgentMode(){ return !!deterministicMode; }
 
 export function planFromInstruction(instr){
   const lower = (instr||'').toLowerCase();
