@@ -1,120 +1,132 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
-const dbFile = process.env.DB_FILE || (process.env.NODE_ENV==='test' ? ':memory:' : 'data.db');
-export const db = new Database(dbFile);
+// --- DB Isolation Core ---
+// We keep a mutable exported binding `db` so tests can swap the active in-memory database
+// without reloading every dependent module. All DAO helpers reference the live `db` variable
+// at call time (not capturing it at definition) so reassignment is safe.
+let dbFile = process.env.DB_FILE || (process.env.NODE_ENV==='test' ? ':memory:' : 'data.db');
+let db = new Database(dbFile);
 db.pragma('journal_mode = WAL');
 
-db.exec(`CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  email TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'user',
-  created_at TEXT NOT NULL,
-  login_count INTEGER NOT NULL DEFAULT 0
-);`);
-
-db.exec(`CREATE TABLE IF NOT EXISTS techniques (
-  id TEXT PRIMARY KEY,
-  category TEXT NOT NULL,
-  name TEXT NOT NULL,
-  description TEXT,
-  template TEXT,
-  status TEXT NOT NULL DEFAULT 'published',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);`);
-
-db.exec(`CREATE TABLE IF NOT EXISTS technique_versions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  technique_id TEXT NOT NULL,
-  ts INTEGER NOT NULL,
-  category TEXT,
-  name TEXT,
-  description TEXT,
-  template TEXT,
-  FOREIGN KEY(technique_id) REFERENCES techniques(id) ON DELETE CASCADE
-);`);
-
-db.exec(`CREATE TABLE IF NOT EXISTS activity (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts INTEGER NOT NULL,
-  type TEXT NOT NULL,
-  user_id TEXT,
-  meta TEXT
-);`);
-
-// Scan executions (nmap / nuclei or others)
-db.exec(`CREATE TABLE IF NOT EXISTS scans (
-  id TEXT PRIMARY KEY,
-  user_id TEXT,
-  target TEXT NOT NULL,
-  type TEXT NOT NULL, -- nmap|nuclei|other
-  command TEXT NOT NULL,
-  status TEXT NOT NULL, -- queued|running|completed|failed
-  started_at INTEGER,
-  completed_at INTEGER,
-  raw_output TEXT,
-  summary_json TEXT, -- cached parsed summary
-  score REAL, -- simple risk score from summary
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);`);
-
-// AI generated recommendations based on scans
-db.exec(`CREATE TABLE IF NOT EXISTS scan_recommendations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  scan_id TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  text TEXT NOT NULL,
-  weight REAL NOT NULL DEFAULT 0,
-  applied INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
-);`);
-
-// AI chat memory per user
-db.exec(`CREATE TABLE IF NOT EXISTS ai_messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT,
-  ts INTEGER NOT NULL,
-  role TEXT NOT NULL, -- user|assistant|system
-  content TEXT NOT NULL
-);`);
-
-// Agent tasks (multi-step plans the AI executes: e.g., run scans then summarize)
-db.exec(`CREATE TABLE IF NOT EXISTS ai_tasks (
-  id TEXT PRIMARY KEY,
-  user_id TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  status TEXT NOT NULL, -- queued|running|completed|failed
-  instruction TEXT NOT NULL,
-  plan_json TEXT,
-  result_json TEXT,
-  error TEXT
-);`);
-
-// Global AI tuning settings (single row id=1)
-db.exec(`CREATE TABLE IF NOT EXISTS ai_settings (
-  id INTEGER PRIMARY KEY CHECK (id=1),
-  goal TEXT,          -- High-level mission / north star for the AI agent
-  tone TEXT,          -- Tone/style guidelines
-  guardrails TEXT,    -- Safety / scope limitations text
-  updated_at INTEGER NOT NULL
-);`);
-// Seed default settings if empty
-const aiSettingsExists = db.prepare('SELECT 1 FROM ai_settings WHERE id=1').get();
-if(!aiSettingsExists){
-  db.prepare('INSERT INTO ai_settings (id,goal,tone,guardrails,updated_at) VALUES (1,?,?,?,?)')
-    .run('Increase actionable security insight velocity for users while minimizing false positives.', 'Concise, professional, proactive, evidence-driven.', 'Never fabricate scan data. Only queue nmap or nuclei scans. Decline any request unrelated to application security scanning.', Date.now());
+function applySchema(target){
+  target.exec(`CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TEXT NOT NULL,
+    login_count INTEGER NOT NULL DEFAULT 0
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS techniques (
+    id TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    template TEXT,
+    status TEXT NOT NULL DEFAULT 'published',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS technique_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    technique_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    category TEXT,
+    name TEXT,
+    description TEXT,
+    template TEXT,
+    FOREIGN KEY(technique_id) REFERENCES techniques(id) ON DELETE CASCADE
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    user_id TEXT,
+    meta TEXT
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS scans (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    target TEXT NOT NULL,
+    type TEXT NOT NULL,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+    raw_output TEXT,
+    summary_json TEXT,
+    score REAL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS scan_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 0,
+    applied INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS ai_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    ts INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS ai_tasks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    plan_json TEXT,
+    result_json TEXT,
+    error TEXT
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS ai_settings (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    goal TEXT,
+    tone TEXT,
+    guardrails TEXT,
+    updated_at INTEGER NOT NULL
+  );`);
+  // Schema migrations tracking (Sprint A)
+  target.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at INTEGER NOT NULL
+  );`);
+  const aiSettingsExists = target.prepare('SELECT 1 FROM ai_settings WHERE id=1').get();
+  if(!aiSettingsExists){
+    target.prepare('INSERT INTO ai_settings (id,goal,tone,guardrails,updated_at) VALUES (1,?,?,?,?)')
+      .run('Increase actionable security insight velocity for users while minimizing false positives.', 'Concise, professional, proactive, evidence-driven.', 'Never fabricate scan data. Only queue nmap or nuclei scans. Decline any request unrelated to application security scanning.', Date.now());
+  }
 }
+
+applySchema(db);
+
+// Swap active DB (tests)
+export function isolateTestDb(label){
+  if(process.env.NODE_ENV !== 'test') return db; // only isolate in test env
+  const newDb = new Database(':memory:');
+  newDb.pragma('journal_mode = WAL');
+  applySchema(newDb);
+  db = newDb; // reassign live binding
+  if(label) try { console.log('[test-db] isolated DB instance', label); } catch {}
+  return db;
+}
+
+export { db }; // live binding
 
 export function seedAdmin(bcrypt){
   const exists = db.prepare('SELECT 1 FROM users WHERE email=?').get('admin@example.com');
   if(!exists){
     db.prepare('INSERT INTO users (id,email,password_hash,role,created_at) VALUES (?,?,?,?,?)')
       .run(randomUUID(),'admin@example.com', bcrypt.hashSync('password',10),'admin', new Date().toISOString());
-    console.log('Seeded default admin (SQLite): admin@example.com / password');
+    try { console.log('Seeded default admin (SQLite): admin@example.com / password'); } catch{}
   }
 }
 
@@ -203,5 +215,5 @@ export const AISettings = {
 };
 
 export function resetAll(){
-  db.exec('DELETE FROM activity; DELETE FROM technique_versions; DELETE FROM techniques; DELETE FROM users;');
+  db.exec('DELETE FROM activity; DELETE FROM technique_versions; DELETE FROM techniques; DELETE FROM users; DELETE FROM scans; DELETE FROM scan_recommendations; DELETE FROM ai_messages; DELETE FROM ai_tasks;');
 }

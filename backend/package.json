@@ -11,8 +11,9 @@
     "test": "node --test --test-reporter tap",
     "test:watch": "node --test --watch --test-reporter tap",
     "test:ci": "node scripts/ci-guard.js && node --test --test-reporter tap",
-  "test:stability": "node scripts/stability-runner.js",
-  "test:timing": "node scripts/timing-summary.js"
+    "test:stability": "node scripts/stability-runner.js",
+    "test:timing": "node scripts/timing-summary.js",
+    "db:migrate": "node scripts/migrate.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
