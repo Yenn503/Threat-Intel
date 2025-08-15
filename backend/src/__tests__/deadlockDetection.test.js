@@ -13,7 +13,7 @@ startAgentLoop();
 
 // With configurable deadlock timeout, verify circular dependency triggers task failure quickly.
 
-test('circular dependency triggers deadlock failure', async ()=>{
+test('circular dependency rejected at plan ingestion', async ()=>{
   const login = await request(app).post('/api/auth/login').send({ email:'admin@example.com', password:'password' });
   assert.equal(login.status,200); const token = login.body.token;
   const plan = [
@@ -21,7 +21,6 @@ test('circular dependency triggers deadlock failure', async ()=>{
     { tool:'validate_finding', args:{ target:'scanme.nmap.org', findingId:'x' }, dependsOn:[0] }
   ];
   const exec = await request(app).post('/api/ai/agent/execute').set('Authorization','Bearer '+token).send({ instruction:'Cycle test', plan });
-  assert.equal(exec.status,200); const id = exec.body.task.id;
-  let failed=false; for(let i=0;i<20;i++){ await new Promise(r=> setTimeout(r,80)); const r = await request(app).get('/api/ai/agent/tasks/'+id).set('Authorization','Bearer '+token); if(r.body.task.status==='failed'){ failed=true; assert.match(r.body.task.error,/deadlock/i); break; } }
-  assert.equal(failed,true,'circular dependency should deadlock-fail');
+  assert.equal(exec.status,400);
+  assert.match(exec.body.error||'',/cyclic|cycle/i);
 });

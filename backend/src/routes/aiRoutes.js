@@ -7,6 +7,7 @@ import { enqueueScan } from '../services/scanService.js';
 import { planFromInstruction } from '../services/agentService.js';
 import { sanitizePlan, validatePlanSteps } from '../planValidation.js';
 import { normalizeMultiAgentPlan, listAgents, detectPlanCycle } from '../services/orchestratorService.js';
+import { computeTaskTimeline } from '../services/metricsService.js';
 import { getTargetAllowlist } from '../constants.js';
 
 // Extracted AI & Agent routes
@@ -177,6 +178,7 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
   });
   router.get('/agent/tasks', authMiddleware, (req,res)=>{ res.json({ ok:true, tasks: AITasks.list(req.user.id) }); });
   router.get('/agent/tasks/:id', authMiddleware, (req,res)=>{ const t = AITasks.get(req.params.id); if(!t || t.user_id!==req.user.id) return res.status(404).json({ error:'not found'}); res.json({ ok:true, task:t }); });
+  router.get('/agent/tasks/:id/timeline', authMiddleware, (req,res)=>{ const t = AITasks.get(req.params.id); if(!t || t.user_id!==req.user.id) return res.status(404).json({ error:'not found'}); const timeline = computeTaskTimeline(t); res.json({ ok:true, timeline }); });
 
   app.use('/api/ai', router);
 }

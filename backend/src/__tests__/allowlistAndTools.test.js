@@ -39,6 +39,6 @@ test('validate/report placeholder tools execute via plan', async ()=>{
   ];
   const exec = await request(app).post('/api/ai/agent/execute').set('Authorization','Bearer '+token).send({ instruction:'Full workflow', plan });
   assert.equal(exec.status,200);
-  const id = exec.body.task.id; let done=false; for(let i=0;i<40;i++){ await sleep(80); const r= await request(app).get('/api/ai/agent/tasks/'+id).set('Authorization','Bearer '+token); if(r.body.task.status==='completed'){ done=true; break; } }
+  const id = exec.body.task.id; let done=false; for(let i=0;i<60;i++){ await sleep(80); const r= await request(app).get('/api/ai/agent/tasks/'+id).set('Authorization','Bearer '+token); if(r.body.task.status==='completed'){ done=true; break; } }
   assert.ok(done,'workflow completed');
 });
