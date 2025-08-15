@@ -129,7 +129,9 @@ import { startAgentLoop } from './services/agentService.js';
 // Register externalized route groups
 registerScanRoutes(app, authMiddleware, record);
 registerAIRoutes(app, { authMiddleware, adminMiddleware, record });
-startAgentLoop();
+if(!process.env.DISABLE_AUTO_AGENT_LOOP){
+  startAgentLoop();
+}
 
 // Basic parsers
 // parseNmap / parseNuclei / deriveScore now sourced from scanService

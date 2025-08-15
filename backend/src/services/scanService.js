@@ -33,11 +33,23 @@ export function deriveScore(summary){
   return Math.min(100, score);
 }
 
-// Queue & execution state
+// Queue & execution state with injectable executor
 const scanQueue = [];
 let scanning = false;
+let customExecutor = null; // if set via setScanExecutor
+export function setScanExecutor(fn){ customExecutor = typeof fn === 'function' ? fn : null; }
 export function enqueueScan(task){ scanQueue.push(task); process.nextTick(runNext); }
-function runNext(){ if(scanning) return; const next = scanQueue.shift(); if(!next) return; scanning=true; executeScan(next).finally(()=>{ scanning=false; if(scanQueue.length) runNext(); }); }
+function runNext(){
+  if(scanning) return;
+  const next = scanQueue.shift();
+  if(!next) return;
+  scanning = true;
+  const execFn = customExecutor || executeScan;
+  Promise.resolve(execFn(next)).catch(()=>{/* swallow to avoid breaking queue */}).finally(()=>{
+    scanning = false;
+    if(scanQueue.length) runNext();
+  });
+}
 export function queueDepth(){ return scanQueue.length; }
 
 async function executeScan(task){
@@ -102,5 +114,7 @@ export function generateRecommendations(type, summary, scanId){
 
 export default {
   enqueueScan,
-  queueDepth
+  queueDepth,
+  setExecutor: setScanExecutor,
+  setScanExecutor
 };
