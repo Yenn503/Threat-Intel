@@ -62,8 +62,14 @@ export const tools = {
     schema: { required:['findingId','target'], properties:{ findingId:{type:'string'}, target:{type:'string'} } },
     run: ({ findingId, target }) => {
       if(!targetAllowed(target)) throw new Error('target not allowed');
-      // Placeholder: pretend validation succeeded
-      return { findingId, validated:true, evidence:'stub-validation' };
+      const lastNuclei = db.prepare('SELECT summary_json FROM scans WHERE target=? AND type="nuclei" AND status="completed" ORDER BY created_at DESC LIMIT 1').get(target);
+      let nucleiSummary={ findings:[] };
+      try { nucleiSummary = JSON.parse(lastNuclei?.summary_json||'{}'); } catch {}
+      const hit = (nucleiSummary.findings||[]).find(f=> f.id===findingId || f.templateID===findingId || f.name===findingId);
+      if(hit){
+        return { findingId, exists:true, validated:true, severity: hit.severity||null, evidence: hit.evidence||'found in latest scan' };
+      }
+      return { findingId, exists:false, validated:false, reason:'finding not present in latest nuclei results' };
     }
   }
   , report_findings: {
@@ -73,10 +79,12 @@ export const tools = {
       if(!targetAllowed(target)) throw new Error('target not allowed');
       const lastNmap = db.prepare('SELECT summary_json FROM scans WHERE target=? AND type="nmap" AND status="completed" ORDER BY created_at DESC LIMIT 1').get(target);
       const lastNuclei = db.prepare('SELECT summary_json FROM scans WHERE target=? AND type="nuclei" AND status="completed" ORDER BY created_at DESC LIMIT 1').get(target);
-      let nmapSummary={}, nucleiSummary={};
+      let nmapSummary={}, nucleiSummary={ findings:[] };
       try { nmapSummary = JSON.parse(lastNmap?.summary_json||'{}'); } catch{}
       try { nucleiSummary = JSON.parse(lastNuclei?.summary_json||'{}'); } catch{}
-      return { target, openPorts: nmapSummary.openPorts||[], findings: nucleiSummary.findings||[], generatedAt: new Date().toISOString() };
+      const findings = nucleiSummary.findings||[];
+      const severityCounts = findings.reduce((acc,f)=>{ const s=(f.severity||'unknown').toLowerCase(); acc[s]=(acc[s]||0)+1; return acc; },{});
+      return { target, openPorts: nmapSummary.openPorts||[], openPortCount: (nmapSummary.openPorts||[]).length||0, findings, findingCount: findings.length, severityCounts, generatedAt: new Date().toISOString() };
     }
   }
 };
