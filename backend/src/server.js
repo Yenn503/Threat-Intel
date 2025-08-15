@@ -126,12 +126,25 @@ import scanService, { enqueueScan } from './services/scanService.js';
 import registerScanRoutes from './routes/scanRoutes.js';
 import registerAIRoutes from './routes/aiRoutes.js';
 import { startAgentLoop } from './services/agentService.js';
+import { logger } from './logger.js';
 // Register externalized route groups
+// Async handler wrapper
+function ah(fn){ return function(req,res,next){ Promise.resolve(fn(req,res,next)).catch(next); }; }
+
 registerScanRoutes(app, authMiddleware, record);
-registerAIRoutes(app, { authMiddleware, adminMiddleware, record });
+registerAIRoutes(app, { authMiddleware, adminMiddleware, record, ah });
 if(!process.env.DISABLE_AUTO_AGENT_LOOP){
   startAgentLoop();
 }
+
+// Central error handler
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next)=>{
+  try { logger.error('http_error',{ path:req.path, method:req.method, err: err.message }); } catch{}
+  if(res.headersSent) return next(err);
+  const status = err.status || 500;
+  res.status(status).json({ error: status===500? 'Internal error' : err.message });
+});
 
 // Basic parsers
 // parseNmap / parseNuclei / deriveScore now sourced from scanService

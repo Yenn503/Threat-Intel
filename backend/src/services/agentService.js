@@ -3,6 +3,7 @@ import { db, Scans, ScanRecs, AIMessages, AITasks } from '../db.js';
 import { executeToolStep } from '../aiTools.js';
 import { enqueueScan } from './scanService.js';
 import { nextRunnableSteps, canRunStep } from './orchestratorService.js';
+import { logStepTransition, logger } from '../logger.js';
 
 let agentLoopRunning = false;
 let loopStarted = false;
@@ -71,13 +72,13 @@ async function agentLoop(){
   if(step.status!=='pending') continue;
         if(step.tool){
           try {
-            step.status='running'; mutated=true; AITasks.updatePlan(task.id, plan);
+            const prev = step.status; step.status='running'; mutated=true; logStepTransition(task.id, step, prev, step.status); AITasks.updatePlan(task.id, plan);
             AIMessages.add(task.user_id,'assistant', `Running ${step.tool} ${step.args? JSON.stringify(step.args):''}`);
             const result = await executeToolStep(step, task.user_id, enqueueScan);
             if(result && result.scanId){
-              step.scanId = result.scanId; step.waitForScan = true; step.status='waiting';
-            } else { step.result = result; step.status='done'; AIMessages.add(task.user_id,'assistant', `${step.tool} done.`); }
-          } catch(e){ step.status='error'; step.error=e.message.slice(0,200); }
+              step.scanId = result.scanId; step.waitForScan = true; const prev2 = step.status; step.status='waiting'; logStepTransition(task.id, step, prev2, step.status);
+            } else { step.result = result; const prev2 = step.status; step.status='done'; logStepTransition(task.id, step, prev2, step.status); AIMessages.add(task.user_id,'assistant', `${step.tool} done.`); }
+          } catch(e){ const prev2 = step.status; step.status='error'; step.error=e.message.slice(0,200); logStepTransition(task.id, step, prev2, step.status); logger.error('tool_step_error',{ taskId:task.id, step: step.idx, err:e.message }); }
           mutated=true; break;
         }
         if(step.action==='queue-scan'){
@@ -90,13 +91,13 @@ async function agentLoop(){
           const id = uuidv4();
           Scans.create({ id, user_id:task.user_id, target:step.target, type:step.kind, command:cmd });
           enqueueScan({ id, type:step.kind, command:cmd, target:step.target });
-          step.scanId = id; step.status='running'; mutated=true; break;
+          step.scanId = id; const prev = step.status; step.status='running'; logStepTransition(task.id, step, prev, step.status); mutated=true; break;
         } else if(step.action==='await-scan' || step.waitForScan){
           if(!step.scanId){ const prev = plan.find(p=> p.action==='queue-scan' && p.kind===step.kind && p.target===step.target && p.scanId); if(prev) step.scanId=prev.scanId; else { step.status='error'; step.error='missing scan ref'; mutated=true; break; } }
           const scan = Scans.get(step.scanId);
           if(!scan){ step.status='error'; step.error='scan missing'; mutated=true; break; }
           if(scan.status==='failed'){ step.status='error'; step.error='scan failed'; mutated=true; break; }
-          if(scan.status==='completed'){ step.status='done'; mutated=true; continue; }
+          if(scan.status==='completed'){ const prev = step.status; step.status='done'; logStepTransition(task.id, step, prev, step.status); mutated=true; continue; }
           break; // still running
         } else if(step.action==='summarize'){
           const lastNmap = db.prepare("SELECT * FROM scans WHERE target=? AND type='nmap' AND status='completed' ORDER BY created_at DESC LIMIT 1").get(step.target);
@@ -106,7 +107,7 @@ async function agentLoop(){
           try { nucleiSummary = JSON.parse(lastNuclei?.summary_json||'{}'); } catch{}
           const recs = lastNuclei? ScanRecs.listForScan(lastNuclei.id): [];
           const textSummary = `Summary for ${step.target}:\nOpen Ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.service).join(', ')||'none'}\nFindings: ${(nucleiSummary.findings||[]).length} issues (critical:${(nucleiSummary.findings||[]).filter(f=>f.severity==='critical').length}, high:${(nucleiSummary.findings||[]).filter(f=>f.severity==='high').length}, medium:${(nucleiSummary.findings||[]).filter(f=>f.severity==='medium').length})\nTop Recommendations:\n${recs.slice(0,5).map(r=> '- '+r.text).join('\n') || 'None'}\n`;
-          step.result = { text: textSummary }; step.status='done'; mutated=true;
+          step.result = { text: textSummary }; const prev = step.status; step.status='done'; logStepTransition(task.id, step, prev, step.status); mutated=true;
         }
       }
       if(mutated){ AITasks.updatePlan(task.id, plan); }

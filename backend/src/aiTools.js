@@ -2,7 +2,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { db, Scans } from './db.js';
 import dns from 'dns/promises';
-import { TARGET_REGEX } from './constants.js';
+import { TARGET_REGEX, targetAllowed } from './constants.js';
 
 export function buildScan(kind, target, flags=''){
   const baseBin = kind==='nmap'? (process.env.NMAP_PATH||'nmap') : (process.env.NUCLEI_PATH||'nuclei');
@@ -15,7 +15,8 @@ export const tools = {
     description: 'Run an nmap service/version scan (fast by default).',
     schema: { required:['target'], properties:{ target:{type:'string'}, flags:{type:'string'} } },
     run: ({ target, flags='' }, userId, enqueueScan) => {
-      if(!TARGET_REGEX.test(target)) throw new Error('invalid target');
+  if(!TARGET_REGEX.test(target)) throw new Error('invalid target');
+  if(!targetAllowed(target)) throw new Error('target not allowed');
       const command = buildScan('nmap', target, flags||'-F');
       const id = uuidv4();
       Scans.create({ id, user_id:userId, target, type:'nmap', command });
@@ -27,7 +28,8 @@ export const tools = {
     description: 'Run nuclei scan (restricted severities).',
     schema: { required:['target'], properties:{ target:{type:'string'}, flags:{type:'string'} } },
     run: ({ target, flags='' }, userId, enqueueScan) => {
-      if(!TARGET_REGEX.test(target)) throw new Error('invalid target');
+  if(!TARGET_REGEX.test(target)) throw new Error('invalid target');
+  if(!targetAllowed(target)) throw new Error('target not allowed');
       const command = buildScan('nuclei', target, flags||'-severity medium,high,critical');
       const id = uuidv4();
       Scans.create({ id, user_id:userId, target, type:'nuclei', command });
@@ -53,6 +55,28 @@ export const tools = {
       try { nmapSummary = JSON.parse(lastNmap?.summary_json||'{}'); } catch{}
       try { nucleiSummary = JSON.parse(lastNuclei?.summary_json||'{}'); } catch{}
       return { nmap: nmapSummary, nuclei: nucleiSummary };
+    }
+  }
+  , validate_finding: {
+    description: 'Validate a finding id against current scan outputs (placeholder).',
+    schema: { required:['findingId','target'], properties:{ findingId:{type:'string'}, target:{type:'string'} } },
+    run: ({ findingId, target }) => {
+      if(!targetAllowed(target)) throw new Error('target not allowed');
+      // Placeholder: pretend validation succeeded
+      return { findingId, validated:true, evidence:'stub-validation' };
+    }
+  }
+  , report_findings: {
+    description: 'Aggregate latest summaries into a report (placeholder).',
+    schema: { required:['target'], properties:{ target:{type:'string'} } },
+    run: ({ target }) => {
+      if(!targetAllowed(target)) throw new Error('target not allowed');
+      const lastNmap = db.prepare('SELECT summary_json FROM scans WHERE target=? AND type="nmap" AND status="completed" ORDER BY created_at DESC LIMIT 1').get(target);
+      const lastNuclei = db.prepare('SELECT summary_json FROM scans WHERE target=? AND type="nuclei" AND status="completed" ORDER BY created_at DESC LIMIT 1').get(target);
+      let nmapSummary={}, nucleiSummary={};
+      try { nmapSummary = JSON.parse(lastNmap?.summary_json||'{}'); } catch{}
+      try { nucleiSummary = JSON.parse(lastNuclei?.summary_json||'{}'); } catch{}
+      return { target, openPorts: nmapSummary.openPorts||[], findings: nucleiSummary.findings||[], generatedAt: new Date().toISOString() };
     }
   }
 };

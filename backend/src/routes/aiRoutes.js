@@ -9,7 +9,7 @@ import { sanitizePlan, validatePlanSteps } from '../planValidation.js';
 import { normalizeMultiAgentPlan, listAgents } from '../services/orchestratorService.js';
 
 // Extracted AI & Agent routes
-export function registerAIRoutes(app, { authMiddleware, adminMiddleware, record }) {
+export function registerAIRoutes(app, { authMiddleware, adminMiddleware, record, ah }) {
   const router = express.Router();
 
   // /api/ai/chat
@@ -64,6 +64,8 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
   // history
   router.get('/history', authMiddleware, (req,res)=>{ res.json({ ok:true, history: AIMessages.recent(req.user.id) }); });
   router.get('/health', authMiddleware, (req,res)=>{ res.json({ ok:true, llm: llmEnabled() }); });
+  // Intentional test error route to validate error middleware (harmless generic error)
+  router.get('/_test/error', authMiddleware, (req,res)=>{ throw new Error('boom'); });
   router.get('/debug/llm', authMiddleware, (req,res)=>{
     const key = process.env.GEMINI_API_KEY||''; const masked = key? key.slice(0,6)+'...'+key.slice(-4):'';
     res.json({ ok:true, llm: llmEnabled(), model: process.env.GEMINI_MODEL||null, keyPresent: !!key, keyMasked: masked });

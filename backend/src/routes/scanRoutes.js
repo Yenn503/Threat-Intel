@@ -2,7 +2,7 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn } from 'child_process';
 import { Scans, ScanRecs } from '../db.js';
-import { TARGET_REGEX } from '../constants.js';
+import { TARGET_REGEX, targetAllowed } from '../constants.js';
 import { buildScan } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
 
@@ -40,7 +40,8 @@ export function registerScanRoutes(app, authMiddleware, record){
   router.post('/', authMiddleware, (req,res)=>{
     const { target, kind, flags } = req.body || {};
     if(!target || !kind) return res.status(400).json({ error:'target & kind required'});
-    if(!TARGET_REGEX.test(target)) return res.status(400).json({ error:'invalid target'});
+  if(!TARGET_REGEX.test(target)) return res.status(400).json({ error:'invalid target'});
+  if(!targetAllowed(target)) return res.status(403).json({ error:'target not allowed'});
     if(!['nmap','nuclei'].includes(kind)) return res.status(400).json({ error:'unsupported kind'});
     const cmd = buildScan(kind, target, flags||'');
     const id = uuidv4();
