@@ -2,7 +2,10 @@ import React from 'react';
 
 export function BarSeries({ data }){
   const max = Math.max(...data.map(d=>d.count||d.value||0),1);
-  return <div className="bar-series">{data.map(d=> <div key={d.hour||d.label} className="bar-wrap"><div className="bar" style={{height:((d.count||d.value||0)/max*100)+'%'}} title={(d.count||d.value||0)+" events @"+(d.hour||d.label)+":00"}></div><div className="bar-label">{d.hour||d.label}</div></div>)}</div>;
+  return <div className="bar-series">{data.map((d,i)=> {
+    const key = (d.hour!=null? 'h-'+d.hour : d.label? 'l-'+d.label : 'i-'+i);
+    return <div key={key} className="bar-wrap"><div className="bar" style={{height:((d.count||d.value||0)/max*100)+'%'}} title={(d.count||d.value||0)+" events @"+(d.hour||d.label)+":00"}></div><div className="bar-label">{d.hour||d.label}</div></div>;
+  })}</div>;
 }
 
 export function MiniDonut({ counts }){

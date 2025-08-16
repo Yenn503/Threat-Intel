@@ -1,29 +1,63 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { apiFetch, wsUrl, waitForBackendPort } from '../../../lib/apiClient.js';
 import './agentPanel.css';
 import LoopToggle from './LoopToggle.jsx';
 
 function useAgentHeartbeat(token){
-  const [data,setData] = useState({ agents:[], queue:[], loop:{}, events:[], ts: Date.now() });
+  const [data,setData] = useState({ agents:[], queue:[], loop:{}, events:[], ts: Date.now(), fallback:false });
   const wsRef = useRef(null);
+  const [filters,setFilters] = useState({ type:'all', windowMin:0 });
+  const reconnectRef = useRef({ attempts:0, timer:null, manual:false });
+  const pollRef = useRef({ active:false, timer:null });
   useEffect(()=>{
     if(!token) return;
-    const url = `${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/agent/ws?token=${token}`;
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-    ws.onmessage = ev => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if(msg.type==='heartbeat'){
-          setData({ agents: msg.agents||[], queue: msg.queue||[], loop: msg.loop||{}, events: msg.events||[], ts: msg.ts });
-        } else if(msg.type==='hello') {
-          setData(d=> ({ ...d, loop: msg.loop||d.loop }));
+    let stopped = false;
+  async function connect(){
+      if(stopped) return;
+    await waitForBackendPort();
+  const url = wsUrl(`/api/agent/ws?token=${token}`);
+    try { console.log('[AgentPanel] connecting', url); } catch{}
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      let opened=false;
+      ws.onopen = ()=>{ opened=true; reconnectRef.current.attempts=0; };
+      ws.onmessage = ev => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if(msg.type==='heartbeat'){
+            setData({ agents: msg.agents||[], queue: msg.queue||[], loop: msg.loop||{}, events: msg.events||[], ts: msg.ts });
+          } else if(msg.type==='hello') {
+            setData(d=> ({ ...d, loop: msg.loop||d.loop }));
+          }
+        } catch {}
+      };
+  ws.onclose = ()=>{
+        wsRef.current=null;
+        if(stopped) return;
+        const attempt = ++reconnectRef.current.attempts;
+        const delay = Math.min(30000, Math.pow(2, attempt) * 250); // exponential backoff capped at 30s
+        reconnectRef.current.timer = setTimeout(connect, delay);
+        if(attempt>=3 && !pollRef.current.active){
+          pollRef.current.active = true;
+          const poll = async()=>{
+            if(stopped) return;
+            try {
+              const s = await apiFetch('/api/agent/status',{ headers:{ Authorization:'Bearer '+token }});
+      if(s.ok){ const js = await s.json(); setData(d=> ({ ...d, agents: js.agents||[], loop: js.loop||d.loop, ts: js.ts||Date.now(), fallback:true })); }
+              const q = await apiFetch('/api/agent/queue',{ headers:{ Authorization:'Bearer '+token }});
+      if(q.ok){ const jq = await q.json(); setData(d=> ({ ...d, queue: jq.queue||[], ts: jq.ts||Date.now(), fallback:true })); }
+            } catch{}
+            pollRef.current.timer = setTimeout(poll, 4000);
+          };
+          poll();
         }
-      } catch {}
-    };
-    ws.onclose = ()=>{ wsRef.current=null; };
-    return ()=> ws.close();
+      };
+      ws.onerror = ()=>{ try { ws.close(); } catch{} };
+    }
+    connect();
+    return ()=>{ stopped=true; if(wsRef.current) try { wsRef.current.close(); } catch{}; if(reconnectRef.current.timer) clearTimeout(reconnectRef.current.timer); if(pollRef.current.timer) clearTimeout(pollRef.current.timer); };
   },[token]);
-  return data;
+  return { ...data, filters, setFilters };
 }
 
 function AgentStatusGrid({ agents }){
@@ -93,22 +127,117 @@ function QueueView({ queue }){
   );
 }
 
+function DrillDown({ token, target }){
+  const [open, setOpen] = useState(false);
+  const [loading,setLoading] = useState(false);
+  const [enrichment,setEnrichment] = useState(null);
+  const [validation,setValidation] = useState(null);
+  async function load(){
+    if(!target) return;
+    setLoading(true);
+    try {
+      // fetch latest completed nmap scan for target to get scanId
+      const rScan = await fetch(`/api/scans?target=${encodeURIComponent(target)}&limit=1&type=nmap`, { headers:{ Authorization:'Bearer '+token }});
+      let scanId=null;
+      if(rScan.ok){ const js = await rScan.json(); scanId = js.scans?.[0]?.id; }
+      if(scanId){
+        const rEn = await fetch(`/api/scan/enrichment/${scanId}`, { headers:{ Authorization:'Bearer '+token }});
+        if(rEn.ok){ const js = await rEn.json(); setEnrichment(js.enrichment); }
+      }
+      const rVal = await fetch(`/api/validation/stats/${encodeURIComponent(target)}`, { headers:{ Authorization:'Bearer '+token }});
+      if(rVal.ok){ const js = await rVal.json(); setValidation(js.stats); }
+    } catch{}
+    setLoading(false);
+  }
+  useEffect(()=>{ if(open && enrichment==null && !loading) load(); },[open]);
+  if(!target) return null;
+  return <div className="drilldown">
+    <button className="btn tiny" onClick={()=> setOpen(o=> !o)}>{open? 'Hide':'Details'}</button>
+    {open && <div className="drill-body">
+      {loading && <div className="mini">Loading…</div>}
+      {!loading && <>
+        <div className="mini-section">
+          <div className="mini-title">Enrichment</div>
+          {enrichment? <div className="mini-json">{enrichment.openPorts?.length? enrichment.openPorts.slice(0,10).map(p=> `${p.port}/${p.service}`).join(', '): 'No ports'}</div> : <div className="mini-json empty">No enrichment</div>}
+        </div>
+        <div className="mini-section">
+          <div className="mini-title">Validation</div>
+          {validation? <div className="mini-json">{validation.validated}/{validation.total} valid</div> : <div className="mini-json empty">No stats</div>}
+        </div>
+      </>}
+    </div>}
+  </div>;
+}
+
 export default function AgentPanel({ token }){
   const hb = useAgentHeartbeat(token);
+  const activeTarget = useMemo(()=> hb.agents.find(a=> a.status==='running' && a.target)?.target || null, [hb.agents]);
+  const filteredEvents = useMemo(()=> {
+    let ev = hb.events||[];
+    if(hb.filters.type !== 'all') ev = ev.filter(e=> e.type===hb.filters.type);
+    if(hb.filters.windowMin){ const cutoff = Date.now() - hb.filters.windowMin*60*1000; ev = ev.filter(e=> e.ts >= cutoff); }
+    return ev;
+  },[hb.events, hb.filters]);
+  async function manual(op){
+    try {
+  const body = op==='step'? JSON.stringify({ taskId: (hb.queue[0]?.id) }) : undefined;
+  await apiFetch(`/api/agent/op/${op}`, { method:'POST', headers:{ Authorization:'Bearer '+token, ...(body? { 'Content-Type':'application/json'}:{} ) }, body });
+    } catch{}
+  }
+  const [cfg,setCfg] = useState(null);
+  useEffect(()=>{ (async()=>{ try { const r= await apiFetch(`/api/agent/config`,{ headers:{ Authorization:'Bearer '+token }}); if(r.ok){ const j=await r.json(); setCfg(j.config); } } catch{} })(); },[token]);
+  async function toggleDiff(){
+    try {
+  const r = await apiFetch(`/api/agent/config`, { method:'PATCH', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token }, body: JSON.stringify({ diffBasedNuclei: !cfg?.diffBasedNuclei }) });
+      if(r.ok){ const j=await r.json(); setCfg(j.config); }
+    } catch{}
+  }
   return (
     <div className="agent-panel">
       <div className="panel-header">
         <h2>Agent Monitor</h2>
         <LoopToggle token={token} loop={hb.loop} onChange={()=>{/* loop state will refresh via heartbeat */}} />
         <div className="loop-state">Loop: {hb.loop.running? 'running':'idle'} {hb.loop.paused && <span className="badge" style={{background:'#b91c1c'}}>paused</span>} {hb.loop.deterministic && <span className="badge">deterministic</span>} <span className="interval">{hb.loop.intervalMs}ms</span></div>
-        <div className="timestamp">Updated {new Date(hb.ts).toLocaleTimeString()}</div>
+  <div className="timestamp">Updated {new Date(hb.ts).toLocaleTimeString()} {hb.fallback && <span className="badge" style={{background:'#92400e'}}>fallback</span>}</div>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:'0.5rem'}}>
+        {activeTarget && <div className="active-target">Active: <strong>{activeTarget}</strong></div>}
+        <DrillDown token={token} target={activeTarget} />
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6}}>
+          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10}} title="Only auto-queue nuclei when new ports appear in Nmap vs previous scan.">
+            <input type="checkbox" checked={!!cfg?.diffBasedNuclei} onChange={toggleDiff} /> diff-based nuclei
+          </label>
+        </div>
       </div>
       <AgentStatusGrid agents={hb.agents} />
       <h3>Queue</h3>
       <QueueView queue={hb.queue} />
-      <h3 style={{marginTop:'1rem'}}>Recent Agent Events</h3>
+      <h3 style={{marginTop:'1rem', display:'flex',alignItems:'center',gap:8}}>Recent Agent Events
+        <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center'}}>
+          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10}}>Type
+            <select value={hb.filters.type} onChange={e=> hb.setFilters(f=> ({...f, type:e.target.value}))} style={{fontSize:10}}>
+              <option value="all">all</option>
+              <option value="error">error</option>
+              <option value="task_complete">task_complete</option>
+              <option value="step_done">step_done</option>
+            </select>
+          </label>
+          <label style={{display:'flex',alignItems:'center',gap:4,fontSize:10}}>Window
+            <select value={hb.filters.windowMin} onChange={e=> hb.setFilters(f=> ({...f, windowMin: parseInt(e.target.value,10)}))} style={{fontSize:10}}>
+              <option value={0}>all</option>
+              <option value={5}>5m</option>
+              <option value={15}>15m</option>
+              <option value={60}>1h</option>
+            </select>
+          </label>
+          <div className="manual-btns">
+            <button className="btn tiny" onClick={()=> manual('step')}>Step</button>
+            <button className="btn tiny" onClick={()=> manual('flush')}>Flush</button>
+          </div>
+        </div>
+      </h3>
       <div className="events-list">
-        {hb.events && hb.events.slice().reverse().map(e=> (
+        {filteredEvents && filteredEvents.slice().reverse().map(e=> (
           <div key={e.id||e.ts} className={"evt type-"+e.type}>
             <span className="ts">{new Date(e.ts).toLocaleTimeString()}</span>
             <span className="label">{e.type}</span>
@@ -118,7 +247,7 @@ export default function AgentPanel({ token }){
             {e.error && <span className="error" title={e.error}>{e.error}</span>}
           </div>
         ))}
-        {(!hb.events || !hb.events.length) && <div className="empty" style={{padding:'0.5rem'}}>No events yet.</div>}
+  {(!filteredEvents || !filteredEvents.length) && <div className="empty" style={{padding:'0.5rem'}}>No events.</div>}
       </div>
     </div>
   );

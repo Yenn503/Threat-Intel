@@ -119,6 +119,14 @@ function applySchema(target){
     tool TEXT,
     data TEXT
   );`);
+  // Agent runtime configuration (single row)
+  target.exec(`CREATE TABLE IF NOT EXISTS agent_config (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    diff_based_nuclei INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );`);
+  const cfgExists = target.prepare('SELECT 1 FROM agent_config WHERE id=1').get();
+  if(!cfgExists){ target.prepare('INSERT INTO agent_config (id,diff_based_nuclei,updated_at) VALUES (1,0,?)').run(Date.now()); }
   // Schema migrations tracking (Sprint A)
   target.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id TEXT PRIMARY KEY,
@@ -245,6 +253,16 @@ export const AgentEvents = {
     sql += ' ORDER BY id DESC LIMIT ?'; params.push(limit);
     const rows = db.prepare(sql).all(...params);
     return rows.map(r=> ({ ...r, data: r.data? safeParse(r.data): undefined })).reverse();
+  }
+};
+
+export const AgentConfig = {
+  get(){ return db.prepare('SELECT diff_based_nuclei as diffBasedNuclei, updated_at FROM agent_config WHERE id=1').get(); },
+  update(patch){
+    const current = AgentConfig.get();
+    const next = { diffBasedNuclei: patch.diffBasedNuclei !== undefined ? (patch.diffBasedNuclei?1:0) : (current?.diffBasedNuclei?1:0) };
+    db.prepare('UPDATE agent_config SET diff_based_nuclei=?, updated_at=? WHERE id=1').run(next.diffBasedNuclei, Date.now());
+    return AgentConfig.get();
   }
 };
 

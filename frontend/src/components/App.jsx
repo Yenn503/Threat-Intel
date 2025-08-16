@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { wsUrl, initBackendDiscovery, waitForBackendPort, discoverBackendPort } from '../lib/apiClient.js';
 import { FiHome, FiCpu, FiTerminal, FiCode, FiDatabase, FiShield, FiSettings, FiGlobe } from 'react-icons/fi';
 import Dashboard from './panels/Dashboard.jsx';
 import AgentPanel from './panels/Agent/AgentPanel.jsx';
@@ -43,23 +44,44 @@ function AppShell(){
   const [consoleConnected, setConsoleConnected] = useState(false);
 
   useEffect(()=>{ document.documentElement.classList.toggle('light', theme==='light'); localStorage.setItem('ti_theme', theme); },[theme]);
+  // Kick off backend port discovery immediately (dev auto-port fallback support)
+  useEffect(()=>{ initBackendDiscovery(); },[]);
   useEffect(()=>{ if(localStorage.getItem('ti_theme')) return; const mq = window.matchMedia('(prefers-color-scheme: light)'); const handler = e=> setTheme(e.matches? 'light':'dark'); mq.addEventListener('change', handler); return ()=> mq.removeEventListener('change', handler); },[]);
   useEffect(()=>{ localStorage.setItem('ti_active_panel', active); },[active]);
   useEffect(()=>{ function onKey(e){ if(e.ctrlKey && e.shiftKey && e.key.toLowerCase()==='t'){ setTheme(t=> t==='dark'?'light':'dark'); e.preventDefault(); } } window.addEventListener('keydown', onKey); return ()=> window.removeEventListener('keydown', onKey); },[]);
   useEffect(()=>{ function onKey(e){ if(e.ctrlKey && !e.shiftKey && e.key.toLowerCase()==='k'){ e.preventDefault(); setCommandOpen(o=>!o); setCommandQuery(''); } } window.addEventListener('keydown',onKey); return ()=> window.removeEventListener('keydown',onKey); },[]);
 
-  useEffect(()=>{ if(!token){ setTechniquesMeta([]); return; } fetch('http://localhost:4000/api/techniques').then(r=>r.json()).then(d=> setTechniquesMeta(d.techniques||[])).catch(()=>{}); },[token]);
+  useEffect(()=>{ if(!token){ setTechniquesMeta([]); return; } fetch((window.location.port==='5173'?'http://localhost:4000':'')+'/api/techniques').then(r=>r.json()).then(d=> setTechniquesMeta(d.techniques||[])).catch(()=>{}); },[token]);
   useEffect(()=>{ function key(e){ if(e.ctrlKey && e.altKey && (e.key==='ArrowRight' || e.key==='ArrowLeft')){ e.preventDefault(); const idx = panels.indexOf(active); if(idx!==-1){ const next = e.key==='ArrowRight'? (idx+1)%panels.length : (idx-1+panels.length)%panels.length; setActive(panels[next]); } } } window.addEventListener('keydown', key); return ()=> window.removeEventListener('keydown', key); },[active]);
 
   useEffect(()=>{
+    let stopped=false;
     if(!token){ if(wsRef.current){ wsRef.current.close(); wsRef.current=null; setConsoleConnected(false);} return; }
-    if(wsRef.current) return;
-    const ws = new WebSocket(`ws://localhost:4000/api/terminal?token=${token}`);
-    wsRef.current = ws;
-    ws.onopen = ()=> setConsoleConnected(true);
-    ws.onclose = ()=> { setConsoleConnected(false); wsRef.current=null; };
-    ws.onmessage = ev => { try { const msg = JSON.parse(ev.data); if(msg.type==='data'){ setConsoleState(s => ({...s, buffer: s.buffer + msg.data })); } } catch{} };
-    return ()=> ws.close();
+    async function connect(){
+      if(stopped || wsRef.current) return;
+      await waitForBackendPort();
+      // If still pointing at 4000, refetch meta in case backend shifted post-start
+      try {
+        const stored = localStorage.getItem('ti_backend_port');
+        if(stored === '4000'){ await discoverBackendPort(true); }
+      } catch{}
+  const url = wsUrl(`/api/terminal?token=${token}`);
+  try { console.log('[ConsoleWS] connecting', url); } catch{}
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onopen = ()=> { setConsoleConnected(true); backoff.attempts=0; };
+      ws.onclose = ()=> {
+        setConsoleConnected(false); wsRef.current=null;
+        if(stopped) return;
+        const delay = Math.min(30000, Math.pow(2, ++backoff.attempts)*300);
+        backoff.timer = setTimeout(connect, delay);
+      };
+      ws.onerror = ()=> { try { ws.close(); } catch{} };
+      ws.onmessage = ev => { try { const msg = JSON.parse(ev.data); if(msg.type==='data'){ setConsoleState(s => ({...s, buffer: s.buffer + msg.data })); } } catch{} };
+    }
+    const backoff = { attempts:0, timer:null };
+    connect();
+    return ()=> { stopped=true; if(backoff.timer) clearTimeout(backoff.timer); if(wsRef.current){ try { wsRef.current.close(); } catch{} wsRef.current=null; } };
   },[token]);
 
   function sendConsole(data){ if(wsRef.current) wsRef.current.send(JSON.stringify({ type:'stdin', data })); }

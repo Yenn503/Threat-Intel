@@ -22,6 +22,7 @@ dotenv.config();
 
 const app = express();
 app.use(cors({ origin:true, credentials:true }));
+// Helmet CSP relaxed for dev auto-port shifting; include wildcard localhost ports for WS/API.
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: {
@@ -30,7 +31,8 @@ app.use(helmet({
       "default-src": ["'self'"],
       "script-src": ["'self'","'unsafe-inline'"],
       "style-src": ["'self'","'unsafe-inline'"],
-      "connect-src": ["'self'","ws://localhost:4000"],
+      // Allow any localhost port (ws/http) during dev; production should pin exact origins via ENV.
+      "connect-src": ["'self'","ws:","http://localhost:4000","http://localhost:4001","http://localhost:4002","http://localhost:4003","http://localhost:4004","http://localhost:4005","ws://localhost:4000","ws://localhost:4001","ws://localhost:4002","ws://localhost:4003","ws://localhost:4004","ws://localhost:4005"],
       "img-src": ["'self'","data:"]
     }
   },
@@ -561,6 +563,10 @@ app.get('/api/agent/queue', authMiddleware, (req,res)=>{
   try { res.json({ ok:true, queue: getQueueOverview(5), ts: Date.now() }); }
   catch(e){ res.status(500).json({ error:'queue error' }); }
 });
+// Agent runtime config (admin)
+import { getAgentConfig, updateAgentConfig } from './services/agentConfigService.js';
+app.get('/api/agent/config', authMiddleware, adminMiddleware, (req,res)=>{ res.json({ ok:true, config: getAgentConfig() }); });
+app.patch('/api/agent/config', authMiddleware, adminMiddleware, (req,res)=>{ try { res.json({ ok:true, config: updateAgentConfig(req.body||{}) }); } catch(e){ res.status(400).json({ error:'config update failed'}); } });
 // Pause / Resume agent loop (admin only)
 app.post('/api/agent/loop/:action', authMiddleware, adminMiddleware, (req,res)=>{
   const { action } = req.params;
@@ -587,7 +593,9 @@ app.get('/api/agent/events', authMiddleware, adminMiddleware, (req,res)=>{
 app.post('/api/agent/op/:op', authMiddleware, adminMiddleware, async (req,res)=>{
   const { op } = req.params; const { taskId } = req.body||{};
   if(op==='step'){
-    if(!taskId) return res.status(400).json({ error:'taskId required'});
+    if(!taskId){
+      return res.status(400).json({ error:'taskId required', hint:'Provide a running taskId to advance one step.' });
+    }
     try { await import('./services/agentService.js').then(m=> m.runAgentOnce({ deterministic:true })); } catch{}
     return res.json({ ok:true, op, taskId });
   }
@@ -841,98 +849,129 @@ app.get('/api/admin/system', authMiddleware, adminMiddleware, (req,res)=>{
 
 // Assessments health check
 app.get('/api/assess/health', (req,res)=> res.json({ ok:true }));
+// Generic health alias (user attempted /api/health and received 404) – provide simple OK response
+app.get('/api/health', (req,res)=> res.json({ ok:true, service:'backend', uptime: process.uptime() }));
+
+// Expose actual bound port (useful when frontend dev server must discover fallback port after EADDRINUSE auto-shift)
+app.get('/api/meta/port', (req,res)=> {
+  const actual = process.env.ACTUAL_PORT || (server.address()? server.address().port: null);
+  res.json({ port: actual? Number(actual): null });
+});
+
+// Simple diagnostics to confirm WS paths are registered and server reports upgrade listeners
+app.get('/api/meta/wsdiagnostics', (req,res)=>{
+  const actual = process.env.ACTUAL_PORT || (server.address()? server.address().port: null);
+  res.json({
+    port: actual? Number(actual): null,
+    wsPaths: ['/api/terminal','/api/agent/ws'],
+  counts: wsDiag.counts,
+  recentUpgrades: wsDiag.upgrades.slice(-10),
+    process: { pid: process.pid, uptime: process.uptime() },
+    env: { ACTUAL_PORT: process.env.ACTUAL_PORT }
+  });
+});
 
 // Terminal WS (authenticated)
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/api/terminal' });
-// Agent heartbeat WS (read-only monitoring) - reuse same HTTP server with separate path
-const wssAgents = new WebSocketServer({ server, path: '/api/agent/ws' });
+// Unified WebSocket server (avoids multiple bound instances & path race conditions under --watch restarts)
+const unifiedWSS = new WebSocketServer({ noServer: true });
+function logWs(evt, meta){ try { logger.info('ws_'+evt, meta); } catch {} }
+unifiedWSS.on('error', err=> logWs('unified_error',{ err: err.message }));
+// Diagnostics state
+const wsDiag = { upgrades: [], counts: { terminal:0, agent:0 } };
+function pushUpgrade(rec){ wsDiag.upgrades.push({ ts: Date.now(), ...rec }); if(wsDiag.upgrades.length>50) wsDiag.upgrades.splice(0, wsDiag.upgrades.length-50); }
+
+server.on('upgrade', (req, socket, head) => {
+  try {
+    const u = new URL(req.url, 'http://localhost');
+    const pathname = u.pathname;
+    if(pathname === '/api/terminal' || pathname === '/api/agent/ws'){
+  const rec = { path: pathname, query: u.search, ua: req.headers['user-agent'] };
+  logWs('upgrade', rec);
+  pushUpgrade(rec);
+      unifiedWSS.handleUpgrade(req, socket, head, (ws)=>{
+        ws._path = pathname;
+        unifiedWSS.emit('connection', ws, req, pathname);
+      });
+    } else {
+      socket.destroy();
+    }
+  } catch(e){ try { socket.destroy(); } catch{} }
+});
 
 function verifyToken(token){
   try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
 }
 
-wss.on('connection', (ws, req) => {
+unifiedWSS.on('connection', (ws, req, pathname) => {
   const params = new URLSearchParams(req.url.split('?')[1] || '');
   const token = params.get('token');
-  const payload = verifyToken(token || '');
-  if (!payload) { ws.close(1008, 'unauthorized'); return; }
-  const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash';
-  const shellArgs = process.platform === 'win32' ? ['-NoLogo','-NoProfile'] : [];
-  const term = spawn(shell, shellArgs, { stdio: 'pipe' });
-  const id = uuidv4();
-  ws.send(JSON.stringify({ type: 'init', id }));
-  metrics.terminalSessions++; record('terminal_open', payload.sub);
-  // Banner suppression (PowerShell often prints banner even with -NoLogo in some environments)
-  let bannerSeen = false;
-  const bannerRegex = /Windows PowerShell[\s\S]*?https:\/\/aka\.ms\/PSWindows\r?\n\r?\n?/i;
-  function processChunk(buf){
-    let text = buf.toString();
-    if(!bannerSeen){
-      const match = text.match(bannerRegex);
-      if(match){
-        bannerSeen = true; // Keep first banner as-is (optional). If you want to drop first too, set text = text.replace(bannerRegex,'');
-        // For subsequent chunks bannerSeen true ensures removal.
+  const payload = verifyToken(token||'');
+  if(!payload){ try { ws.close(1008,'unauthorized'); } catch{} return; }
+  if(pathname === '/api/terminal'){
+    wsDiag.counts.terminal++;
+    // Terminal logic (moved from previous wss handler)
+    const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash';
+    const shellArgs = process.platform === 'win32' ? ['-NoLogo','-NoProfile'] : [];
+    const term = spawn(shell, shellArgs, { stdio: 'pipe' });
+    const id = uuidv4();
+    ws.send(JSON.stringify({ type: 'init', id }));
+    metrics.terminalSessions++; record('terminal_open', payload.sub);
+    let bannerSeen = false;
+    const bannerRegex = /Windows PowerShell[\s\S]*?https:\/\/aka\.ms\/PSWindows\r?\n\r?\n?/i;
+    function processChunk(buf){
+      let text = buf.toString();
+      if(!bannerSeen){
+        const match = text.match(bannerRegex);
+        if(match){ bannerSeen = true; }
+      } else { text = text.replace(bannerRegex,''); }
+      if(text.length){ try { ws.send(JSON.stringify({ type:'data', data: text })); } catch{} }
+    }
+    term.stdout.on('data', processChunk);
+    term.stderr.on('data', processChunk);
+    term.on('close', code => { try { ws.send(JSON.stringify({ type: 'exit', code })); } catch{} });
+    ws.on('message', msg => { try { const parsed = JSON.parse(msg); if(parsed.type==='stdin'){ term.stdin.write(parsed.data); if(parsed.data && /\S/.test(parsed.data.replace(/\r|\n/g,''))){ metrics.terminalCommands++; record('terminal_cmd', payload.sub); } } } catch{} });
+  ws.on('close', () => { try { term.kill(); } catch{} wsDiag.counts.terminal--; });
+    return;
+  }
+  if(pathname === '/api/agent/ws'){
+  wsDiag.counts.agent++;
+    ws.send(JSON.stringify({ type:'hello', ts: Date.now(), loop: agentLoopInfo() }));
+    let closed=false;
+  ws.on('close', ()=>{ closed=true; wsDiag.counts.agent--; });
+    const POLL_INTERVAL_MS = 1000;
+    const MIN_PUSH_INTERVAL_MS = 500;
+    const MAX_INTERVAL_MS = 5000;
+    let lastSentTs = 0;
+    let lastSnapshotKey = '';
+    function buildSnapshot(){
+      const agents = getAgentStatusList();
+      const queue = getQueueOverview(5);
+      const events = recentAgentEvents(25);
+      return { agents, queue, loop: agentLoopInfo(), events };
+    }
+    function snapshotKey(s){
+      return JSON.stringify({
+        a: s.agents.map(x=> [x.agent,x.status,x.target||'',x.lastRun||0]),
+        q: s.queue.map(q=> [q.id,q.status,q.pending,q.running,q.total]),
+        l: s.loop.running,
+        e: s.events && s.events.length ? s.events[s.events.length-1].id : 0
+      });
+    }
+    const pollTimer = setInterval(()=>{
+      if(closed){ clearInterval(pollTimer); return; }
+      let snap; try { snap = buildSnapshot(); } catch { return; }
+      const key = snapshotKey(snap);
+      const now = Date.now();
+      const diff = key !== lastSnapshotKey;
+      const due = (now - lastSentTs) >= MAX_INTERVAL_MS;
+      const throttle = (now - lastSentTs) < MIN_PUSH_INTERVAL_MS;
+      if((diff && !throttle) || due){
+        lastSnapshotKey = key; lastSentTs = now;
+        try { ws.send(JSON.stringify({ type:'heartbeat', ts: now, reason: diff? 'change':'interval', ...snap })); } catch{}
       }
-    } else {
-      // Remove any subsequent banners entirely
-      text = text.replace(bannerRegex,'');
-    }
-    if(text.length){ ws.send(JSON.stringify({ type:'data', data: text })); }
+    }, POLL_INTERVAL_MS).unref();
   }
-  term.stdout.on('data', processChunk);
-  term.stderr.on('data', processChunk);
-  term.on('close', code => ws.send(JSON.stringify({ type: 'exit', code })));
-  ws.on('message', msg => {
-    try { const parsed = JSON.parse(msg); if (parsed.type==='stdin'){ term.stdin.write(parsed.data); if(parsed.data && /\S/.test(parsed.data.replace(/\r|\n/g,''))){ metrics.terminalCommands++; record('terminal_cmd', payload.sub); } } } catch {}
-  });
-  ws.on('close', () => term.kill());
-});
-
-// Lightweight auth: require token but no interactive shell
-wssAgents.on('connection', (ws, req) => {
-  const params = new URLSearchParams(req.url.split('?')[1] || '');
-  const token = params.get('token');
-  const payload = verifyToken(token || '');
-  if(!payload){ ws.close(1008,'unauthorized'); return; }
-  ws.send(JSON.stringify({ type:'hello', ts: Date.now(), loop: agentLoopInfo() }));
-  let closed=false;
-  ws.on('close', ()=>{ closed=true; });
-  // Push-on-change with throttling: poll frequently, send only if snapshot diff or max interval elapsed
-  const POLL_INTERVAL_MS = 1000;
-  const MIN_PUSH_INTERVAL_MS = 500; // avoid flooding on rapid transitions
-  const MAX_INTERVAL_MS = 5000; // always send at least this often
-  let lastSentTs = 0;
-  let lastSnapshotKey = '';
-  function buildSnapshot(){
-    const agents = getAgentStatusList();
-    const queue = getQueueOverview(5);
-    const events = recentAgentEvents(25);
-    return { agents, queue, loop: agentLoopInfo(), events };
-  }
-  function snapshotKey(s){
-    // concise stable key: agent statuses + queue task ids + loop.running + last event id
-    return JSON.stringify({
-      a: s.agents.map(x=> [x.agent,x.status,x.target||'',x.lastRun||0]),
-      q: s.queue.map(q=> [q.id,q.status,q.pending,q.running,q.total]),
-      l: s.loop.running,
-      e: s.events && s.events.length ? s.events[s.events.length-1].id : 0
-    });
-  }
-  const pollTimer = setInterval(()=>{
-    if(closed){ clearInterval(pollTimer); return; }
-    let snap;
-    try { snap = buildSnapshot(); } catch { return; }
-    const key = snapshotKey(snap);
-    const now = Date.now();
-    const diff = key !== lastSnapshotKey;
-    const due = (now - lastSentTs) >= MAX_INTERVAL_MS;
-    const throttle = (now - lastSentTs) < MIN_PUSH_INTERVAL_MS;
-    if((diff && !throttle) || due){
-      lastSnapshotKey = key; lastSentTs = now;
-  try { ws.send(JSON.stringify({ type:'heartbeat', ts: now, reason: diff? 'change':'interval', ...snap })); } catch {/* ignore send errors */}
-    }
-  }, POLL_INTERVAL_MS).unref();
 });
 
 // No automatic server.listen here; start.js is responsible for binding the port.

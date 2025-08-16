@@ -59,6 +59,24 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
         }
       } catch {/* ignore */}
     }
+    // Heuristic multi-step plan inference (nmap -> nuclei -> summarize) when user issues natural language scan request
+    if(/\b(run|start|queue|do)\b/i.test(message) && /\b(nmap|scan)\b/i.test(message)){
+      // extract first plausible host
+      const hostMatch = message.match(/\b([A-Za-z0-9_.-]{3,})\b/);
+      if(hostMatch){
+        const target = hostMatch[1];
+        try {
+          const plan = planFromInstruction(`nmap then nuclei ${target}`) || [];
+          if(plan.length){
+            const taskId = uuidv4();
+            AITasks.create({ id:taskId, user_id:req.user.id, instruction: message });
+            const tagged = normalizeMultiAgentPlan(plan.map((s,i)=> ({ ...s, idx:i })));
+            AITasks.setPlan(taskId, tagged);
+            reply += `\n[Queued multi-step agent task ${taskId.slice(0,8)} for ${target} (nmap → nuclei → summarize)]`;
+          }
+        } catch {/* ignore plan inference errors */}
+      }
+    }
     AIMessages.add(req.user.id,'assistant', reply);
     res.json({ ok:true, reply, history: AIMessages.recent(req.user.id) });
   });
@@ -85,7 +103,8 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
     const { prompt, autoplan=true } = req.body || {}; if(!prompt) return res.status(400).json({ error:'prompt required'});
     AIMessages.add(req.user.id,'user', prompt);
     let plan=[]; let llmRaw='';
-  if(useLLM){
+    const useLLM = llmEnabled() && !(process.env.NODE_ENV==='test' && process.env.ENABLE_LLM_TESTS!=='1');
+    if(useLLM){
       try {
         const manifest = toolManifest();
         const system = `You are a dual-mode security assistant. ALWAYS produce:\n1) A natural language answer for the user's prompt.\n2) If actionable tooling is helpful (running scans / summarizing), append a fenced JSON plan block delimited exactly by >>>PLAN and <<<PLAN containing an array of tool steps.\nOnly include the plan if it would advance the user's objective.\nDo not fabricate scan results.\nManifest:${JSON.stringify(manifest)}`;
@@ -98,10 +117,16 @@ Context Snapshot: Open ports: ${(nmapSummary.openPorts||[]).map(p=>p.port+'/'+p.
     } else {
       llmRaw = '[LLM disabled: set GEMINI_API_KEY]';
     }
-  if(!plan.length){
+    if(!plan.length){
       const hostMatch = prompt.match(/\b([A-Za-z0-9_.-]{3,})\b/);
       if(hostMatch && /scan|nmap|recon|enumerate/i.test(prompt)){
-        plan = [{ tool:'nmap_scan', args:{ target: hostMatch[1], flags:'-F' } }, { tool:'summarize_target', args:{ target: hostMatch[1] } }];
+        const target = hostMatch[1];
+        // Provide richer default: nmap -> nuclei -> summarize
+        plan = [
+          { tool:'nmap_scan', args:{ target, flags:'-F' } },
+          { tool:'nuclei_scan', args:{ target } },
+          { tool:'summarize_target', args:{ target } }
+        ];
       }
     }
   plan = validatePlanSteps(plan.filter(s=> s && (s.tool? tools[s.tool]:true)), tools);

@@ -2,6 +2,8 @@ import { spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 // Consolidated DB/DAO imports (avoid duplicate db identifier declarations)
 import { db, Scans, ScanRecs, AIMessages, ScanEnrichment } from '../db.js';
+import { logger } from '../logger.js';
+import { getAgentConfig } from './agentConfigService.js';
 import { enrichScanSummary } from './agentRuntimeService.js';
 import { MAX_SCAN_MS, MAX_OUTPUT_BYTES } from '../constants.js';
 
@@ -88,13 +90,32 @@ async function executeScan(task){
       Scans.complete(id, raw.slice(0,500000), summary, score);
     try { ScanEnrichment.upsert(id, summary); } catch{}
       generateRecommendations(type, summary, id);
-      autoTargetedNuclei(type, summary, task, id).finally(()=> resolve());
+      // If nmap, fetch previous summary for diff-based nuclei triggering
+      let prevSummary=null;
+      if(type==='nmap'){
+        try {
+          const prev = db.prepare("SELECT summary_json FROM scans WHERE target=? AND type='nmap' AND id<>? AND status='completed' ORDER BY created_at DESC LIMIT 1").get(task.target, id);
+          if(prev?.summary_json){ try { prevSummary = JSON.parse(prev.summary_json); } catch{} }
+        } catch{}
+      }
+      autoTargetedNuclei(type, summary, task, id, prevSummary).finally(()=> resolve());
     });
   });
 }
 
-async function autoTargetedNuclei(type, summary, task, parentId){
+async function autoTargetedNuclei(type, summary, task, parentId, prevSummary){
   if(type!=='nmap' || !summary?.openPorts?.length) return;
+  // Diff-based: only trigger if new ports discovered vs previous (when previous exists)
+  const cfg = getAgentConfig();
+  if(cfg.diffBasedNuclei && prevSummary && Array.isArray(prevSummary.openPorts)){
+    const prevPorts = new Set(prevSummary.openPorts.map(p=> p.port));
+    const newPorts = summary.openPorts.filter(p=> !prevPorts.has(p.port));
+    if(!newPorts.length){
+      return; // no new exposure => skip nuclei auto-queue
+    } else {
+  logger.info('nmap_new_ports', { target: task.target, newPorts: newPorts.slice(0,20) });
+    }
+  }
   const svcMap = { 'tomcat':'tomcat','apache':'apache','nginx':'nginx','ssh':'ssh','rdp':'rdp','ftp':'ftp','mysql':'mysql','mariadb':'mysql','mssql':'mssql','postgres':'postgres','redis':'redis','http':'http' };
   const tags = new Set();
   for(const p of summary.openPorts){ const svc=(p.service||'').toLowerCase(); for(const k of Object.keys(svcMap)){ if(svc.includes(k)) tags.add(svcMap[k]); } }
