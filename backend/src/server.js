@@ -20,8 +20,22 @@ import pLimit from 'p-limit';
 
 dotenv.config();
 
+// Global crash diagnostics
+process.on('uncaughtException', err => {
+  try { console.error('[fatal] uncaughtException', err); } catch {}
+});
+process.on('unhandledRejection', reason => {
+  try { console.error('[fatal] unhandledRejection', reason); } catch {}
+});
+
 const app = express();
 app.use(cors({ origin:true, credentials:true }));
+// Startup diagnostics for scan mode & binary paths (helps confirm real vs simulated execution)
+try {
+  console.log(`[scan-init] Real scan mode: ${process.env.ENABLE_REAL_SCANS==='1' ? 'ENABLED' : 'DISABLED (simulation)'}`);
+  console.log(`[scan-init] Nmap binary: ${process.env.NMAP_PATH || 'nmap'}`);
+  console.log(`[scan-init] Nuclei binary: ${process.env.NUCLEI_PATH || 'nuclei'}`);
+} catch {}
 // Helmet CSP relaxed for dev auto-port shifting; include wildcard localhost ports for WS/API.
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },

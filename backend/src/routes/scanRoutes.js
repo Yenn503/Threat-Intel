@@ -1,6 +1,7 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn } from 'child_process';
+import { logger } from '../logger.js';
 import { Scans, ScanRecs, ValidationResults } from '../db.js';
 import { TARGET_REGEX, targetAllowed } from '../constants.js';
 import { checkTargetRateLimit } from '../rateLimiter.js';
@@ -9,11 +10,19 @@ import { enqueueScan } from '../services/scanService.js';
 
 async function probeBinary(bin, args){
   return await new Promise(resolve=>{
-    const p = spawn(bin, args, { stdio:['ignore','pipe','ignore'] });
-    let out=''; let done=false; const to=setTimeout(()=>{ if(!done){ try{p.kill();}catch{} resolve({ ok:false, timeout:true }); } }, 5000);
-    p.stdout.on('data',d=> out+=d.toString());
-    p.on('error',()=>{ clearTimeout(to); done=true; resolve({ ok:false }); });
-    p.on('close',()=>{ clearTimeout(to); done=true; resolve({ ok: !!out, output: out.slice(0,120) }); });
+    const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin);
+    const startTs = Date.now();
+    let spawned;
+    try {
+      spawned = spawn(bin, args, { stdio:['ignore','pipe','ignore'], shell: useShell });
+    } catch (e){
+      logger?.warn?.('probe_spawn_fail',{ bin, error:e.message });
+      return resolve({ ok:false, spawnError:true });
+    }
+    let out=''; let done=false; const to=setTimeout(()=>{ if(!done){ try{ spawned.kill(); }catch{} logger?.warn?.('probe_timeout',{ bin, ms: Date.now()-startTs }); resolve({ ok:false, timeout:true }); } }, 7000);
+    spawned.stdout.on('data',d=> out+=d.toString());
+    spawned.on('error',e=>{ clearTimeout(to); done=true; logger?.warn?.('probe_error',{ bin, error:e.message }); resolve({ ok:false }); });
+    spawned.on('close',code=>{ clearTimeout(to); done=true; const ms = Date.now()-startTs; logger?.info?.('probe_done',{ bin, code, ms }); resolve({ ok: !!out, exitCode:code, output: out.slice(0,160) }); });
   });
 }
 
