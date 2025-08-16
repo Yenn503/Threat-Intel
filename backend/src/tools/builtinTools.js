@@ -9,7 +9,8 @@ import { checkTargetRateLimit } from '../rateLimiter.js';
 
 export function buildScan(kind, target, flags=''){
   const baseBin = kind==='nmap'? (process.env.NMAP_PATH||'nmap') : (process.env.NUCLEI_PATH||'nuclei');
-  const safeFlags = String(flags||'').replace(/[^A-Za-z0-9_:\-\s\/.]/g,'');
+  // Allow commas as they are required for nuclei severity lists (e.g., medium,high,critical)
+  const safeFlags = String(flags||'').replace(/[^A-Za-z0-9_,:\-\s\/.]/g,'');
   return kind==='nmap'? `${baseBin} -Pn -sV ${safeFlags} ${target}` : `${baseBin} -u ${target} ${safeFlags}`;
 }
 function enqueueingScanRun(kind, defaultFlags){
