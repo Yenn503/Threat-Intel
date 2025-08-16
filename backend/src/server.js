@@ -11,8 +11,8 @@ import { v4 as uuidv4 } from 'uuid';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { spawn } from 'child_process';
-import { db, Users, Techniques, Activity, seedAdmin, Scans, ScanRecs, AIMessages, AITasks, AISettings } from './db.js';
-import { llmChat, llmEnabled } from './llm_client.js';
+import { db, Users, Techniques, Activity, seedAdmin, Scans, ScanRecs, AIMessages, AITasks, AISettings, ScanEnrichment, ValidationResults, AgentEvents } from './db.js';
+import { llmChat, llmEnabled } from './llm.js'; // unified llm client
 import EventEmitter from 'events';
 import net from 'net';
 import { promises as dns } from 'dns';
@@ -126,6 +126,9 @@ import scanService, { enqueueScan } from './services/scanService.js';
 import registerScanRoutes from './routes/scanRoutes.js';
 import registerAIRoutes from './routes/aiRoutes.js';
 import { startAgentLoop } from './services/agentService.js';
+import { getAgentStatusList, getQueueOverview } from './services/agentMonitorService.js';
+import { agentLoopInfo, pauseAgentLoop, resumeAgentLoop } from './services/agentService.js';
+import { recentAgentEvents } from './logger.js';
 import { logger } from './logger.js';
 // Register externalized route groups
 // Async handler wrapper
@@ -547,6 +550,73 @@ app.get('/api/assess/wpplugins', authMiddleware, async (req,res)=>{
   res.json(payload);
 });
 
+// --- Agent status minimal endpoints ---
+app.get('/api/agent/status', authMiddleware, (req,res)=>{
+  try {
+    const agents = getAgentStatusList();
+    res.json({ ok:true, agents, ts: Date.now() });
+  } catch(e){ res.status(500).json({ error:'status error' }); }
+});
+app.get('/api/agent/queue', authMiddleware, (req,res)=>{
+  try { res.json({ ok:true, queue: getQueueOverview(5), ts: Date.now() }); }
+  catch(e){ res.status(500).json({ error:'queue error' }); }
+});
+// Pause / Resume agent loop (admin only)
+app.post('/api/agent/loop/:action', authMiddleware, adminMiddleware, (req,res)=>{
+  const { action } = req.params;
+  if(action==='pause'){ pauseAgentLoop(); return res.json({ ok:true, loop: agentLoopInfo(), action }); }
+  if(action==='resume'){ resumeAgentLoop(); return res.json({ ok:true, loop: agentLoopInfo(), action }); }
+  return res.status(400).json({ error:'invalid action'});
+});
+
+// Agent events query (supports simple filtering)
+app.get('/api/agent/events', authMiddleware, adminMiddleware, (req,res)=>{
+  const { limit, type, since, taskId } = req.query;
+  try {
+    const events = AgentEvents.recent({
+      limit: Math.min(200, parseInt(limit||'50',10) || 50),
+      type: type || undefined,
+      since: since? parseInt(since,10): undefined,
+      taskId: taskId || undefined
+    });
+    res.json({ ok:true, events, ts: Date.now() });
+  } catch(e){ res.status(500).json({ error:'events query failed'}); }
+});
+
+// Manual agent operations: trigger next step for a task or flush queued tasks
+app.post('/api/agent/op/:op', authMiddleware, adminMiddleware, async (req,res)=>{
+  const { op } = req.params; const { taskId } = req.body||{};
+  if(op==='step'){
+    if(!taskId) return res.status(400).json({ error:'taskId required'});
+    try { await import('./services/agentService.js').then(m=> m.runAgentOnce({ deterministic:true })); } catch{}
+    return res.json({ ok:true, op, taskId });
+  }
+  if(op==='flush'){
+    try { await import('./services/agentService.js').then(m=> m.runAgentOnce({ deterministic:false })); } catch{}
+    return res.json({ ok:true, op });
+  }
+  return res.status(400).json({ error:'invalid op'});
+});
+
+// Scan enrichment drill-down
+app.get('/api/scan/enrichment/:scanId', authMiddleware, (req,res)=>{
+  const { scanId } = req.params;
+  const row = ScanEnrichment.get(scanId);
+  if(!row) return res.status(404).json({ error:'not found'});
+  try { return res.json({ ok:true, scanId, enrichment: JSON.parse(row.data) }); } catch { return res.json({ ok:true, scanId, enrichment: row.data }); }
+});
+
+// Validation stats for a target (aggregated)
+app.get('/api/validation/stats/:target', authMiddleware, (req,res)=>{
+  const { target } = req.params; if(!target) return res.status(400).json({ error:'target required'});
+  try {
+    const rows = ValidationResults.statsForTarget(target);
+    const stats = { validated:0, invalid:0, total:0 };
+    rows.forEach(r=>{ if(r.validated) stats.validated += r.c; else stats.invalid += r.c; stats.total += r.c; });
+    res.json({ ok:true, target, stats });
+  } catch(e){ res.status(500).json({ error:'stats error'}); }
+});
+
 // --- Generic Technology Fingerprint (CMS / libs / headers) ---
 const fpCache = new Map(); // key -> { expires, data }
 const FP_TTL = 5 * 60 * 1000;
@@ -775,6 +845,8 @@ app.get('/api/assess/health', (req,res)=> res.json({ ok:true }));
 // Terminal WS (authenticated)
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/api/terminal' });
+// Agent heartbeat WS (read-only monitoring) - reuse same HTTP server with separate path
+const wssAgents = new WebSocketServer({ server, path: '/api/agent/ws' });
 
 function verifyToken(token){
   try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
@@ -815,6 +887,52 @@ wss.on('connection', (ws, req) => {
     try { const parsed = JSON.parse(msg); if (parsed.type==='stdin'){ term.stdin.write(parsed.data); if(parsed.data && /\S/.test(parsed.data.replace(/\r|\n/g,''))){ metrics.terminalCommands++; record('terminal_cmd', payload.sub); } } } catch {}
   });
   ws.on('close', () => term.kill());
+});
+
+// Lightweight auth: require token but no interactive shell
+wssAgents.on('connection', (ws, req) => {
+  const params = new URLSearchParams(req.url.split('?')[1] || '');
+  const token = params.get('token');
+  const payload = verifyToken(token || '');
+  if(!payload){ ws.close(1008,'unauthorized'); return; }
+  ws.send(JSON.stringify({ type:'hello', ts: Date.now(), loop: agentLoopInfo() }));
+  let closed=false;
+  ws.on('close', ()=>{ closed=true; });
+  // Push-on-change with throttling: poll frequently, send only if snapshot diff or max interval elapsed
+  const POLL_INTERVAL_MS = 1000;
+  const MIN_PUSH_INTERVAL_MS = 500; // avoid flooding on rapid transitions
+  const MAX_INTERVAL_MS = 5000; // always send at least this often
+  let lastSentTs = 0;
+  let lastSnapshotKey = '';
+  function buildSnapshot(){
+    const agents = getAgentStatusList();
+    const queue = getQueueOverview(5);
+    const events = recentAgentEvents(25);
+    return { agents, queue, loop: agentLoopInfo(), events };
+  }
+  function snapshotKey(s){
+    // concise stable key: agent statuses + queue task ids + loop.running + last event id
+    return JSON.stringify({
+      a: s.agents.map(x=> [x.agent,x.status,x.target||'',x.lastRun||0]),
+      q: s.queue.map(q=> [q.id,q.status,q.pending,q.running,q.total]),
+      l: s.loop.running,
+      e: s.events && s.events.length ? s.events[s.events.length-1].id : 0
+    });
+  }
+  const pollTimer = setInterval(()=>{
+    if(closed){ clearInterval(pollTimer); return; }
+    let snap;
+    try { snap = buildSnapshot(); } catch { return; }
+    const key = snapshotKey(snap);
+    const now = Date.now();
+    const diff = key !== lastSnapshotKey;
+    const due = (now - lastSentTs) >= MAX_INTERVAL_MS;
+    const throttle = (now - lastSentTs) < MIN_PUSH_INTERVAL_MS;
+    if((diff && !throttle) || due){
+      lastSnapshotKey = key; lastSentTs = now;
+  try { ws.send(JSON.stringify({ type:'heartbeat', ts: now, reason: diff? 'change':'interval', ...snap })); } catch {/* ignore send errors */}
+    }
+  }, POLL_INTERVAL_MS).unref();
 });
 
 // No automatic server.listen here; start.js is responsible for binding the port.

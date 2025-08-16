@@ -1,7 +1,7 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db, Scans, ScanRecs, AIMessages, AITasks, AISettings } from '../db.js';
-import { llmChat, llmEnabled } from '../llm_client.js';
+import { llmChat, llmEnabled } from '../llm.js'; // unified client
 import { tools, toolManifest, executeToolStep } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
 import { planFromInstruction, isDeterministicAgentMode } from '../services/agentService.js';

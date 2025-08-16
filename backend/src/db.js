@@ -94,6 +94,31 @@ function applySchema(target){
     guardrails TEXT,
     updated_at INTEGER NOT NULL
   );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS scan_enrichment (
+    scan_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
+  );`);
+  target.exec(`CREATE TABLE IF NOT EXISTS validation_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    validated INTEGER NOT NULL,
+    severity TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
+  );`);
+  // Persistent agent events (lightweight audit of agent activity / errors)
+  target.exec(`CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    task_id TEXT,
+    agent TEXT,
+    tool TEXT,
+    data TEXT
+  );`);
   // Schema migrations tracking (Sprint A)
   target.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id TEXT PRIMARY KEY,
@@ -170,6 +195,7 @@ export const Scans = {
   get(id){ return db.prepare('SELECT * FROM scans WHERE id=?').get(id); },
   latestForTarget(target){ return db.prepare('SELECT * FROM scans WHERE target=? ORDER BY created_at DESC LIMIT 20').all(target); },
   allWithoutSummary(){ return db.prepare("SELECT * FROM scans WHERE status='completed' AND (summary_json IS NULL OR summary_json='')").all(); }
+  ,countRecentForTarget(target, since){ return db.prepare('SELECT COUNT(*) as c FROM scans WHERE target=? AND created_at>=?').get(target, since).c; }
 };
 
 export const ScanRecs = {
@@ -177,6 +203,52 @@ export const ScanRecs = {
   listForScan(scan_id){ return db.prepare('SELECT * FROM scan_recommendations WHERE scan_id=? ORDER BY weight DESC, id ASC').all(scan_id); },
   markApplied(id){ db.prepare('UPDATE scan_recommendations SET applied=1 WHERE id=?').run(id); }
 };
+
+export const ScanEnrichment = {
+  upsert(scan_id, data){
+    if(!scan_id || !data) return;
+    const json = JSON.stringify(data);
+    try {
+      db.prepare('INSERT INTO scan_enrichment (scan_id,data,created_at) VALUES (?,?,?) ON CONFLICT(scan_id) DO UPDATE SET data=excluded.data').run(scan_id, json, Date.now());
+    } catch {/* ignore */}
+  },
+  get(scan_id){ return db.prepare('SELECT data FROM scan_enrichment WHERE scan_id=?').get(scan_id); }
+};
+
+export const ValidationResults = {
+  record({ scan_id, finding_id, validated, severity }){
+    if(!scan_id || !finding_id) return;
+    db.prepare('INSERT INTO validation_results (scan_id,finding_id,validated,severity,created_at) VALUES (?,?,?,?,?)')
+      .run(scan_id, finding_id, validated?1:0, severity||null, Date.now());
+  },
+  statsForTarget(target){
+    // Join via scans to aggregate per target across latest nuclei scan context
+    return db.prepare(`SELECT vr.validated, COUNT(*) as c FROM validation_results vr
+      JOIN scans s ON s.id=vr.scan_id WHERE s.target=? GROUP BY vr.validated`).all(target);
+  },
+  recentForScan(scan_id){ return db.prepare('SELECT finding_id, validated, severity, created_at FROM validation_results WHERE scan_id=? ORDER BY id DESC LIMIT 100').all(scan_id); }
+};
+
+export const AgentEvents = {
+  record(evt){
+    try {
+      db.prepare('INSERT INTO agent_events (ts,type,task_id,agent,tool,data) VALUES (?,?,?,?,?,?)')
+        .run(Date.now(), evt.type, evt.taskId||evt.task_id||null, evt.agent||null, evt.tool||null, evt.data? JSON.stringify(evt.data).slice(0,4000): null);
+    } catch {}
+  },
+  recent({ limit=50, type, since, taskId }={}){
+    let sql = 'SELECT id,ts,type,task_id as taskId,agent,tool,data FROM agent_events WHERE 1=1';
+    const params = [];
+    if(type){ sql += ' AND type=?'; params.push(type); }
+    if(taskId){ sql += ' AND task_id=?'; params.push(taskId); }
+    if(since){ sql += ' AND ts>=?'; params.push(since); }
+    sql += ' ORDER BY id DESC LIMIT ?'; params.push(limit);
+    const rows = db.prepare(sql).all(...params);
+    return rows.map(r=> ({ ...r, data: r.data? safeParse(r.data): undefined })).reverse();
+  }
+};
+
+function safeParse(s){ try { return JSON.parse(s); } catch { return undefined; } }
 
 export const AIMessages = {
   add(user_id, role, content){ db.prepare('INSERT INTO ai_messages (user_id, ts, role, content) VALUES (?,?,?,?)').run(user_id||null, Date.now(), role, content.slice(0,8000)); },

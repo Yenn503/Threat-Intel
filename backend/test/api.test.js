@@ -31,7 +31,7 @@ describe('Threat-Intel minimal API suite', () => {
       server.listen(0, () => {
         const addr = server.address();
         base = `http://127.0.0.1:${addr.port}`;
-        t.diagnostic('listening on '+base);
+        try { if(t && typeof t.diagnostic === 'function') t.diagnostic('listening on '+base); } catch {}
         resolve();
       });
     });

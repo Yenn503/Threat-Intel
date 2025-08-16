@@ -6,14 +6,12 @@
 
 const DEFAULT_AGENT = 'recon';
 
-// Agent registry definition (Phase 2)
-// Each agent can filter which steps it owns and enforce concurrency caps.
-const agentRegistry = {
-  recon: { description:'Discovery & enumeration', owns: s=> ['nmap_scan','dns_lookup','queue-scan','await-scan'].includes(s.tool||s.action), concurrency: 3 },
-  vuln: { description:'Vulnerability scanning & triage', owns: s=> ['nuclei_scan'].includes(s.tool||s.action), concurrency: 2 },
-  validate: { description:'Validation of findings (placeholder)', owns: s=> ['validate_finding'].includes(s.tool), concurrency: 1 },
-  report: { description:'Reporting & summarization', owns: s=> ['summarize_target','summarize','report_findings'].includes(s.tool||s.action), concurrency: 1 }
-};
+// Agent registry definition (Phase 2) now composed from dedicated stubs (extensible)
+import { reconAgent } from '../agents/reconAgent.js';
+import { vulnAgent } from '../agents/vulnAgent.js';
+import { validationAgent } from '../agents/validationAgent.js';
+import { reportingAgent } from '../agents/reportingAgent.js';
+const agentRegistry = { [reconAgent.id]:reconAgent, [vulnAgent.id]:vulnAgent, [validationAgent.id]:validationAgent, [reportingAgent.id]:reportingAgent };
 
 export function listAgents(){
   return Object.entries(agentRegistry).map(([id, a])=> ({ id, description:a.description, concurrency:a.concurrency }));

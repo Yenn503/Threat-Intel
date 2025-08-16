@@ -1,8 +1,9 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn } from 'child_process';
-import { Scans, ScanRecs } from '../db.js';
+import { Scans, ScanRecs, ValidationResults } from '../db.js';
 import { TARGET_REGEX, targetAllowed } from '../constants.js';
+import { checkTargetRateLimit } from '../rateLimiter.js';
 import { buildScan } from '../aiTools.js';
 import { enqueueScan } from '../services/scanService.js';
 
@@ -43,6 +44,10 @@ export function registerScanRoutes(app, authMiddleware, record){
   if(!TARGET_REGEX.test(target)) return res.status(400).json({ error:'invalid target'});
   if(!targetAllowed(target)) return res.status(403).json({ error:'target not allowed'});
     if(!['nmap','nuclei'].includes(kind)) return res.status(400).json({ error:'unsupported kind'});
+    const rl = checkTargetRateLimit(target);
+    if(!rl.allowed){
+      return res.status(429).json({ error:'rate limit: target scan quota exceeded', limit: rl.limit, recent: rl.recent });
+    }
     const cmd = buildScan(kind, target, flags||'');
     const id = uuidv4();
     const rec = Scans.create({ id, user_id:req.user.id, target, type:kind, command:cmd });
@@ -58,6 +63,18 @@ export function registerScanRoutes(app, authMiddleware, record){
   });
 
   router.get('/', authMiddleware, (req,res)=>{ res.json({ ok:true, scans: Scans.list(200) }); });
+
+  // Validation stats per target
+  router.get('/validation/:target', authMiddleware, (req,res)=>{
+    const { target } = req.params;
+    if(!targetAllowed(target)) return res.status(403).json({ error:'target not allowed'});
+    try {
+      const rows = ValidationResults.statsForTarget(target);
+      let total=0, validated=0, invalid=0;
+      for(const r of rows){ total += r.c; if(r.validated) validated = r.c; else invalid = r.c; }
+      res.json({ ok:true, target, stats:{ total, validated, invalid } });
+    } catch(e){ res.status(500).json({ error:'stats error' }); }
+  });
 
   // Legacy plural endpoint compatibility
   app.get('/api/scans', authMiddleware, (req,res)=>{ res.json({ ok:true, scans: Scans.list(200) }); });

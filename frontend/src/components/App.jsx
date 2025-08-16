@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { FiHome, FiCpu, FiTerminal, FiCode, FiDatabase, FiShield, FiSettings, FiGlobe } from 'react-icons/fi';
 import Dashboard from './panels/Dashboard.jsx';
+import AgentPanel from './panels/Agent/AgentPanel.jsx';
 import ExploitPanel from './panels/ExploitPanel.jsx';
 import OSINTPanel from './panels/OSINTPanel.jsx';
 import ConsolePanel from './panels/ConsolePanel.jsx';
@@ -18,16 +19,16 @@ import { ToastProvider, useToast } from './providers/ToastProvider.jsx';
 import PanelErrorBoundary from './common/PanelErrorBoundary.jsx';
 
 // Panel order & grouping definitions for sidebar rendering
-const panels = [ 'Dashboard','Exploits','OSINT','Console','Code Editor','DB Search','Vuln Search','FSWA','Network VA','Digital Footprint','Cyber Risk Exposure','Admin','Settings' ];
+const panels = [ 'Dashboard','Agents','Exploits','OSINT','Console','Code Editor','DB Search','Vuln Search','FSWA','Network VA','Digital Footprint','Cyber Risk Exposure','Admin','Settings' ];
 // Sidebar groups (System rendered separately, pinned bottom)
 const panelGroups = [
-  { label:'Core', items:['Dashboard','Exploits','OSINT'] },
+  { label:'Core', items:['Dashboard','Agents','Exploits','OSINT'] },
   { label:'Tools', items:['Console','Code Editor'] },
   { label:'Databases', items:['DB Search','Vuln Search'] },
   { label:'Assessments', items:['FSWA','Network VA','Digital Footprint','Cyber Risk Exposure'] }
 ];
 const panelIcons = {
-  'Dashboard': <FiHome size={14}/>,'Exploits': <FiCpu size={14}/>,'OSINT': <FiGlobe size={14}/>,'Console': <FiTerminal size={14}/>,'Code Editor': <FiCode size={14}/>,'DB Search': <FiDatabase size={14}/>,'Vuln Search': <FiShield size={14}/>,'FSWA': <FiShield size={14}/>,'Network VA': <FiShield size={14}/>,'Digital Footprint': <FiGlobe size={14}/>,'Cyber Risk Exposure': <FiShield size={14}/>,'Admin': <FiSettings size={14}/>,'Settings': <FiSettings size={14}/>
+  'Dashboard': <FiHome size={14}/>,'Agents': <FiCpu size={14}/>,'Exploits': <FiCpu size={14}/>,'OSINT': <FiGlobe size={14}/>,'Console': <FiTerminal size={14}/>,'Code Editor': <FiCode size={14}/>,'DB Search': <FiDatabase size={14}/>,'Vuln Search': <FiShield size={14}/>,'FSWA': <FiShield size={14}/>,'Network VA': <FiShield size={14}/>,'Digital Footprint': <FiGlobe size={14}/>,'Cyber Risk Exposure': <FiShield size={14}/>,'Admin': <FiSettings size={14}/>,'Settings': <FiSettings size={14}/>
 };
 
 function AppShell(){
@@ -112,6 +113,7 @@ function AppShell(){
           <div className={"center-wrap fade-in" + (active==='FSWA' ? ' wide' : '')}>
             {!token && active !== 'Settings' && <Auth setToken={setToken} />}
             {token && active==='Dashboard' && <Dashboard token={token} setActive={setActive} consoleState={consoleState} />}
+            {token && active==='Agents' && <AgentPanel token={token} />}
             {token && active==='Exploits' && <ExploitPanel token={token} />}
             {token && active==='OSINT' && <OSINTPanel token={token} />}
             {token && <ConsolePanel active={active==='Console'} consoleState={consoleState} setConsoleState={setConsoleState} sendConsole={sendConsole} connected={consoleConnected} />}

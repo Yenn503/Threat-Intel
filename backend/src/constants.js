@@ -19,3 +19,23 @@ export function targetAllowed(host){
 		return host===rule;
 	});
 }
+
+// Rate limiting helpers used by builtinTools (restored to match last working push)
+export function getTargetRateWindowMs(){
+	return parseInt(process.env.TARGET_RATE_WINDOW_MS || '600000', 10); // 10 min default
+}
+export function getTargetRateMaxForTarget(target){
+	// Per-target override map: { "host": number }
+	// Parsed fresh each call so tests mutating process.env see immediate effect.
+	if(target){
+		try {
+			const map = JSON.parse(process.env.TARGET_RATE_LIMITS||'{}');
+			const val = map?.[target];
+			if(Number.isFinite(val) && val>0) return parseInt(val,10);
+		} catch {}
+	}
+	// Fallback env names (support both historical & current)
+	const raw = process.env.TARGET_RATE_MAX_PER_TARGET || process.env.TARGET_RATE_MAX || '5';
+	const parsed = parseInt(raw,10);
+	return Number.isFinite(parsed) && parsed>0 ? parsed : 5;
+}

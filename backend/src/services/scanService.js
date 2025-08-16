@@ -1,6 +1,8 @@
 import { spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
-import { db, Scans, ScanRecs, AIMessages } from '../db.js';
+// Consolidated DB/DAO imports (avoid duplicate db identifier declarations)
+import { db, Scans, ScanRecs, AIMessages, ScanEnrichment } from '../db.js';
+import { enrichScanSummary } from './agentRuntimeService.js';
 import { MAX_SCAN_MS, MAX_OUTPUT_BYTES } from '../constants.js';
 
 // Parsing helpers (migrated from server.js)
@@ -80,9 +82,11 @@ async function executeScan(task){
       if(killed){ Scans.fail(id, 'timeout exceeded'); return resolve(); }
       const raw = out + (err? ('\n[stderr]\n'+err):'');
       let summary={};
-      try { if(type==='nmap') summary = parseNmap(raw); else if(type==='nuclei') summary = parseNuclei(raw); } catch{}
+  try { if(type==='nmap') summary = parseNmap(raw); else if(type==='nuclei') summary = parseNuclei(raw); } catch{}
+  try { summary = enrichScanSummary({ id, type, command, target: task.target }, summary); } catch{}
       const score = deriveScore(summary);
       Scans.complete(id, raw.slice(0,500000), summary, score);
+    try { ScanEnrichment.upsert(id, summary); } catch{}
       generateRecommendations(type, summary, id);
       autoTargetedNuclei(type, summary, task, id).finally(()=> resolve());
     });
